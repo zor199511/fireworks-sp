@@ -1,5 +1,7 @@
 # 🎆 fireworks-sp
 
+> *fireworks-sp = fireworks **stock picker***——每日从 A 股里挑候选标的的系统。
+
 ![python](https://img.shields.io/badge/python-3.12-blue)
 ![license](https://img.shields.io/badge/license-MIT-green)
 ![data](https://img.shields.io/badge/data-akshare%20%7C%20baostock-orange)
