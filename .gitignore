@@ -1,0 +1,9 @@
+.venv/
+data/*.db*
+logs/
+__pycache__/
+*.pyc
+nohup.out
+.pytest_cache/
+.sent-*
+scripts/notify.json
