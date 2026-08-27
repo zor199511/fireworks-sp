@@ -16,6 +16,7 @@ from fwsp.backtest import run_backtest  # noqa: E402
 from fwsp.config import FILTERS  # noqa: E402
 from fwsp.db import get_conn, init_schema  # noqa: E402
 from fwsp.tracker import summary_stats, update_tracking  # noqa: E402
+from fwsp import factors as F, multifactor as M  # noqa: E402
 
 
 @st.cache_data(ttl=120)
@@ -78,9 +79,25 @@ def candle_chart(df: pd.DataFrame) -> go.Figure:
         fig.add_trace(go.Scatter(x=df["date"], y=df[m], name=m,
                                  line=dict(color=col, width=1)))
     fig.update_layout(height=460, xaxis_rangeslider_visible=False,
-                      margin=dict(l=8, r=8, t=24, b=8),
-                      legend=dict(orientation="h", y=1.02))
+                       margin=dict(l=8, r=8, t=24, b=8),
+                       legend=dict(orientation="h", y=1.02))
     return fig
+
+
+@st.cache_data(ttl=3600)
+def build_multifactor():
+    with get_conn() as conn:
+        blob = F.build_factor_panel(conn)
+        fwd = F.forward_returns(blob["close"])
+        quality = blob["quality"]
+    z, ic = M.precompute(blob["factors"], fwd, quality, 10)
+    return z, ic, blob["close"], blob["open"], blob["low"], quality
+
+
+@st.cache_data(ttl=600)
+def load_multifactor_meta():
+    with get_conn() as conn:
+        return M.load_selected(conn)
 
 
 # --------------------------------------------------------------- sidebar
@@ -91,7 +108,8 @@ with st.sidebar:
     st.caption(f"数据更新: {meta['last_update'] or '—'}")
     st.caption(f"股票池 {meta['stocks']} | K线覆盖 {meta['codes']} | "
                f"最新交易日 {meta['last_bar'] or '—'}")
-    page = st.radio("页面", ["今日推荐", "个股查询", "策略回测", "推荐追踪"],
+    page = st.radio("页面", ["今日推荐", "个股查询", "策略回测",
+                             "多因子策略", "推荐追踪"],
                     label_visibility="collapsed")
     st.divider()
     st.caption("候选池生成器，非投资建议。\n买入需独立判断并严格止损。")
@@ -200,6 +218,108 @@ elif page == "策略回测":
         fig.update_layout(height=380, margin=dict(l=8, r=8, t=16, b=8),
                           legend=dict(orientation="h"))
         st.plotly_chart(fig, use_container_width=True)
+
+elif page == "多因子策略":
+    st.header("多因子策略（walk-forward 自动挖掘）")
+    selected = load_multifactor_meta()
+    if not selected:
+        st.warning("尚未挖掘因子。点下方「重新挖掘因子」生成（约 5 分钟）。")
+    else:
+        with get_conn() as conn:
+            raw = conn.execute(
+                "SELECT value FROM meta WHERE key='multifactor_summary'"
+            ).fetchone()
+        import json
+        summ = json.loads(raw[0]) if raw else None
+        st.caption("选中因子: " + ", ".join(selected))
+        if summ:
+            c1, c2, c3, c4 = st.columns(4)
+            c1.metric("OOS 总收益", f"{summ['oos_total_return']*100:+.1f}%")
+            c2.metric("OOS 夏普", f"{summ['oos_sharpe']:.2f}")
+            c3.metric("OOS 回撤", f"{summ['oos_max_drawdown']*100:.1f}%")
+            c4.metric("OOS 胜率", f"{summ['oos_win_rate']*100:.0f}%")
+            st.caption(f"样本外窗口 {summ['holdout']}→今；"
+                       f"对比 IS 总收益 {summ['is_total_return']*100:+.1f}% / "
+                       f"夏普 {summ['is_sharpe']:.2f}。非投资建议。")
+
+    c1, c2 = st.columns(2)
+    if c1.button("生成实时推荐", type="primary"):
+        with st.spinner("构建因子面板(首次约2分钟，之后缓存1小时)…"):
+            z, ic, close, opn, low, quality = build_multifactor()
+            recs = M.live_recommend(z, ic, close, opn, low, quality,
+                                    selected=selected)
+        if not recs:
+            st.error("无可用推荐（因子未挖掘或市场数据不足）")
+        else:
+            st.success(f"实时 Top {len(recs)} 候选（信号日 "
+                       f"{str(close.index[-1].date())}）")
+            rows = [{"排名": i + 1, "代码": r["code"],
+                     "综合分": round(r["score"], 2),
+                     "因子贡献": ", ".join(r["reasons"])}
+                    for i, r in enumerate(recs)]
+            st.dataframe(rows, use_container_width=True, hide_index=True)
+            st.caption("因子贡献 = 各因子 z 分 × 训练窗 IC 权重，"
+                       "仅供研究。")
+
+    if c2.button("重新挖掘因子(约5分钟)"):
+        with st.spinner("贪心挖掘中，请勿关闭…"):
+            import subprocess, sys
+            subprocess.run([sys.executable, "scripts/factor_mine.py"],
+                           cwd=str(Path(__file__).resolve().parent.parent),
+                           check=True)
+            st.cache_data.clear()
+        st.success("挖掘完成，已更新 meta。刷新页面查看。")
+
+    st.divider()
+    st.subheader("参数化多因子回测")
+    st.caption("用已挖掘因子 + 时间变化质量面板跑 walk-forward（不做 Greedy 重选）。")
+    rc1, rc2, rc3, rc4, rc5 = st.columns(5)
+    freq = rc1.selectbox("调仓频率", ["周", "月"], index=0, key="mf_freq")
+    hzn = rc2.number_input("持有天数", 5, 40, 10, key="mf_hold")
+    stp = rc3.number_input("止损%", -30, -1, -8, key="mf_stop")
+    trl = rc4.number_input("跟踪止损%", 0, 30, 0, key="mf_trail")
+    tpn = rc5.number_input("Top N", 3, 30, 10, key="mf_topn")
+    if st.button("运行多因子回测", key="mf_run", type="primary"):
+        if not selected:
+            st.warning("请先挖掘因子（上方按钮）。")
+        else:
+            with st.spinner("构建因子面板(首次约2分钟) + 回测…"):
+                z, ic, close, opn, low, quality = build_multifactor()
+                with get_conn() as conn:
+                    qp = F.quality_panel(conn, close.index)
+                res = M.walk_forward_backtest(
+                    z, ic, close, opn, low, qp, start="2024-06-01",
+                    top_n=int(tpn), horizon=int(hzn), stop_pct=float(stp),
+                    rebal=('M' if freq == '月' else 'W'),
+                    trail=(float(trl) if trl > 0 else None),
+                    selected=selected)
+            c1, c2, c3, c4, c5 = st.columns(5)
+            c1.metric("总收益", f"{res['total_return']*100:+.1f}%")
+            c2.metric("年化", f"{res['cagr']*100:+.1f}%")
+            c3.metric("最大回撤", f"{res['max_drawdown']*100:.1f}%")
+            c4.metric("胜率", f"{res['win_rate']*100:.0f}%",
+                      f"{int(res['n_trades'])}笔")
+            c5.metric("夏普", f"{res['sharpe']:.2f}")
+            eq = res["equity"]
+            eq_n = eq / eq.iloc[0]
+            with get_conn() as conn:
+                b = conn.execute(
+                    "SELECT date,close FROM index_daily WHERE code='sh.000300' "
+                    "AND date BETWEEN ? AND ? ORDER BY date",
+                    (str(eq.index[0].date()), str(eq.index[-1].date()))
+                ).fetchall()
+            bdf = pd.DataFrame(b, columns=["date", "close"])
+            fig = go.Figure()
+            fig.add_trace(go.Scatter(x=eq_n.index, y=eq_n.values,
+                                     name="多因子", line=dict(color="#f59e0b")))
+            if len(bdf) > 1:
+                bn = bdf["close"] / bdf["close"].iloc[0]
+                fig.add_trace(go.Scatter(x=pd.to_datetime(bdf["date"]), y=bn,
+                                         name="沪深300",
+                                         line=dict(color="#64748b", width=1)))
+            fig.update_layout(height=380, margin=dict(l=8, r=8, t=16, b=8),
+                              legend=dict(orientation="h"))
+            st.plotly_chart(fig, use_container_width=True)
 
 elif page == "推荐追踪":
     st.header("历史推荐表现追踪")
