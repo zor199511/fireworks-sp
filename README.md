@@ -5,38 +5,56 @@
 ![python](https://img.shields.io/badge/python-3.12-blue)
 ![license](https://img.shields.io/badge/license-MIT-green)
 ![data](https://img.shields.io/badge/data-akshare%20%7C%20baostock-orange)
-![universe](https://img.shields.io/badge/A%E8%82%A1-5008%20stocks-brightgreen)
+![universe](https://img.shields.io/badge/A%E8%82%A1-5200%2B%20stocks-brightgreen)
+![multifactor](https://img.shields.io/badge/multifactor-walk--forward%20%2B%20greedy-orange)
 
-> 每日 A 股候选池生成器：**可解释评分 + 面板回测 + 推荐追踪 + 微信推送**的闭环。
-> 从 5000+ 只股票里，用基本面硬过滤 + 技术面反转打分，挑出「深度回调的优质股」，每个交易日 17:30 推到你的微信。
+> 每日 A 股候选池生成器：**可解释评分 + 多因子回测 + 自动因子挖掘 + 推荐追踪 + 微信推送**的闭环。
+> 从 5200+ 只股票里，用「基本面硬过滤 + 技术面反转打分」产出每日候选，并用一套**walk-forward 多因子框架**做量化验证与因子选择，每个交易日 17:30 推到你的微信。
 
 ## ✨ 为什么
 
-A 股 5000+ 只股票，人工翻一遍不现实；免费行情软件要么广告满天，要么不解释「为什么选它」。
-fireworks-sp 把筛选逻辑**写死成可读的规则**：每条推荐都附带打分理由（20 日回调 X%、RSI 超卖、MACD 底金叉…），不黑箱、可追溯。
+A 股 5200+ 只股票，人工翻一遍不现实；免费行情软件要么广告满天，要么不解释「为什么选它」。
+fireworks-sp 把筛选逻辑**写死成可读的规则**：每条推荐都附带打分理由（20 日回调 X%、RSI 超卖、MACD 底金叉…），多因子结论也给出**选中因子与样本外夏普**，不黑箱、可追溯。
 
 ## 🎯 特性
 
+**一、反转策略（每日候选池）**
 - **基本面硬过滤**：市值 ≥ 50 亿、PE∈(0,40]、ROE ≥ 8%、负债率 ≤ 65%（阈值见 `fwsp/config.py` 的 `FILTERS`）
 - **技术面反转打分**：偏好「深度回调的优质股企稳」——回测验证反转策略优于追涨
   - 20 日回调 −35%~−12% → +30；RSI < 38 → +20；止跌企稳 → +20；长期趋势未破 → +15；底部 MACD 金叉 → +10（满分 100）
 - **行业分散约束**：每行业最多 3 只，避免选股全挤在一个板块（`max_per_industry`）
 - **面板向量化回测**：T+1 开盘买入、持有 10 日、−8% 止损、含交易费用，给出胜率/收益参考
 - **推荐追踪**：持续统计历史推荐的实际表现（5 日胜率、平均收益）
+
+**二、多因子框架（量化验证与因子选择）**
+- **27 个价量因子**（`fwsp/factors.py`）：反转/动量（ret_5d…ret_120d、rev_5d/20d）、流动性（amihud、amt_ratio、vol_ratio）、趋势（ma5_ma20、close_ma20/60/120、macd 系列）、相对强度（hi20/60/120_dist、rsi_14）等
+- **RankIC 因子检验**：对每个因子计算全期 RankIC 与 ICIR，筛掉无效因子
+- **walk-forward 回测**（`fwsp/multifactor.py`）：滚动训练窗训练因子权重 → 信号日打分选 TopN → T+1 开盘买入 → 持有 N 日 / 固定止损 / 跟踪止损离场；支持**周度或月度调仓**
+- **前向贪心因子挖掘**（`mine_factors`）：每步加入使 OOS 夏普最高的因子，直至无提升，防过拟合
+- **时间变化质量面板**（`quality_panel`）：按财报披露日（`as_of`）前向填充 ROE/毛利率/债务率/市值/ST，质量门槛随历史变化而非用当前值
+- **冻结 holdout 验证**（`scripts/factor_mine.py`）：挖掘在 IS 窗口（2024-06→2026-01）进行，验证用 2026-01 至今的**真样本外**，并与原反转策略对比
+- **实时推荐**（`live_recommend`）：用最新训练窗在当日信号生成 Top10 + 各因子贡献明细
+- **一键重挖**：`scripts/factor_mine.py` 自动挖掘 → holdout 对比 → 写 meta（`multifactor_selected` / `multifactor_summary`）
+
+**三、部署与推送**
+- **Streamlit 看板**：今日推荐 / 个股查询 / 策略回测 / **多因子策略** / 推荐追踪
+  - 多因子策略页：生成实时推荐、重新挖掘因子、参数化回测（调仓频率 周/月、持有天数、止损%、跟踪止损%、TopN）
 - **微信每日推送**：Server酱，同日去重省额度
-- **Streamlit 看板**：今日推荐 / 个股查询 / 策略回测 / 推荐追踪
 
 ## 🏗️ 架构
 
 ```
-数据层   akshare(东财) / 腾讯行情(兜底) / baostock(K线+指数) → SQLite
+数据层   akshare(东财) / 腾讯行情(兜底) / baostock(K线+指数) / 历史财务回补 → SQLite
 策略层   基本面硬过滤 + 技术面反转打分 + 行业分散
-回测层   面板向量化周度回测: T+1开盘买、持有10日、-8%止损、含费用
-展示层   Streamlit 看板 (今日推荐/个股查询/策略回测/推荐追踪)
+多因子层 27 价量因子 → RankIC → walk-forward 回测 → 前向贪心选因子 → 时间变化质量面板
+回测层   面板向量化周度/月度回测: T+1开盘买、持有N日、-8%止损/跟踪止损、含费用
+展示层   Streamlit 看板 (今日推荐/个股查询/策略回测/多因子策略/推荐追踪)
 推送层   systemd timer 每交易日 17:30 → Server酱微信
 ```
 
 ## 📊 选股逻辑
+
+**反转策略（每日候选池）**
 
 | 维度 | 规则 |
 |---|---|
@@ -48,6 +66,15 @@ fireworks-sp 把筛选逻辑**写死成可读的规则**：每条推荐都附带
 | 技术面 | 反转打分（回调深度 + RSI + 企稳 + 趋势 + MACD），满分 100 |
 | 行业 | 每行业 ≤ 3 只（top_n = 10） |
 
+**多因子框架**
+
+- 因子：`z = (因子 - 截面均值) / 截面标准差`，shift(1) 防前视；RankIC 用秩相关
+- 调仓：walk-forward，滚动 252 日训练窗估计各因子权重（按 IC 符号×幅度），信号日对候选打分取 TopN
+- 退出：持有 `horizon` 日，或触发固定止损（`-8%`）、或跟踪止损（峰值回撤 `trail%`）
+- 质量门槛：时间变化——早期用当时可得的财报，避免现代值泄漏到历史
+
+> **冻结 holdout 实况（2026-01 至今，真样本外）**：选中 5 因子 `amihud / close_ma20 / hi60_dist / amt_ratio / vol_60d`，总收益 **+14.5%**、夏普 **0.92**、回撤 −14.7%、胜率 43.4%；同期原反转策略 −5.3% / 夏普 −0.16。IS 窗口 +341% / 夏普 3.25。**以上均为回测，非实盘。**
+
 ## 🚀 安装与运行
 
 ```bash
@@ -57,11 +84,18 @@ uv sync                                         # 安装依赖
 uv run python scripts/update_data.py --full     # 首次全量建库（约 15-20 分钟）
 uv run python scripts/recommend.py              # 生成今日推荐
 uv run streamlit run scripts/dashboard.py       # 看板 http://<host>:8501
+
+# 多因子：历史财务回补（让质量门槛随时间变化）
+uv run python fwsp/backfill_fundamentals.py     # 回补 2023Q1–2026Q2 ROE/利润/毛利率
+uv run python fwsp/backfill_debt.py             # 回补历史债务率（sina 源，可断点续跑）
+
+# 一键挖掘因子 + 冻结 holdout 验证 + 写 meta（约 15-20 分钟）
+uv run python scripts/factor_mine.py
 ```
 
 ## 🔔 微信推送
 
-推送经项目内 `scripts/notify.py` → Server酱。把 key 写到 `scripts/notify.json`：
+推送经项目内 `scripts/notify.py` → Server酱。把 key 写到 `scripts/notify.json`（已被 `.gitignore` 忽略，不会入库）：
 
 ```json
 {"serverchan_sendkey": "你的SCT..."}
@@ -82,26 +116,31 @@ loginctl enable-linger $USER
 systemctl --user enable --now fireworks-dashboard.service fireworks-daily.timer
 ```
 
+> 多因子挖掘与历史财务回补为按需任务，可在看板「多因子策略」页点按或在服务器手动运行，不计入每日 timer。
+
 ## 📈 数据规模
 
-- Universe：5008 只 A 股（剔除 ST、北交/三板）
-- 历史：2023-01-01 起日线（约 3 年，百万级 K 线）
+- Universe：5200+ 只 A 股（剔除 ST、北交/三板）
+- 历史：2023-01-03 起日线（约 3 年，百万级 K 线）
+- 历史财务：2023Q1–2026Q2 的 ROE / 净利润同比 / 毛利率 / 资产负债率（部分季度债务率为最新期快照）
 - 数据源容灾：
 
 | 数据 | 主源 | 兜底 |
 |---|---|---|
 | 行情快照 | 东财 push2 | 腾讯 qt.gtimg.cn |
 | 历史K线 | 东财 kline | baostock 单会话批量 |
-| 财务季度 | 东财 datacenter | 缺失字段跳过 |
+| 财务季度 | 东财 datacenter | sina 资产负债表（债务率） |
 | 指数 | baostock | — |
 
 > 东财对本机有限流，系统按「少调用、可降级」设计；增量更新直接切快照追加当日 OHLCV。
 
-## ⚠️ 已知限制（v1）
+## ⚠️ 已知限制
 
 - K 线为**不复权**价格：分红除权日指标小幅跳变；回测未复权
-- 回测仅重放技术面打分（基本面用当前值），且用当前成分股池 → **幸存者偏差**，结果偏乐观
-- PE 用静态阈值而非分位
+- 反转策略回测仅重放技术面打分（基本面用当前值），且用当前成分股池 → **幸存者偏差**，结果偏乐观
+- **多因子 OOS 窗口仅约 8 个月**，且仍属回测；选中因子 OOS 与「全因子」OOS 接近，说明在正确质量门槛下因子筛选增量有限
+- 债务率历史不完整：早期季度多为缺失（按「不违规」处理），最新期已密集；上游限流恢复后可重跑 `fwsp/backfill_debt.py` 补全
+- 银行等高杠杆行业债务率天然 >85%，会被质量门槛排除（已知局限）
 
 ## 📜 License
 
