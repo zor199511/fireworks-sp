@@ -90,6 +90,25 @@ def auto_demote(conn, stability_thr: float = 0.0, net_ir_thr: float = 0.0) -> di
     return {"demoted": demoted, "kept": kept}
 
 
+def _factor_drop_reason(res: dict) -> str | None:
+    """更严格晋升门禁：返回剔除原因，None 表示可入选。
+
+    - 净成本 IR<=0 或 NaN：不可交易 / 数值异常（坑1 修复）
+    - 过拟合：OOS 信息比率 > 5× IS（overfit_guard.ratio_alert 同口径）
+    - 失稳：滚动 worst ICIR < 0（近期表现转负）
+    """
+    nir = res.get("net_ir")
+    if not (isinstance(nir, float) and not np.isnan(nir) and nir > 0):
+        return "净成本IR<=0/NaN(不可交易)"
+    oos = res.get("oos_is_ratio")
+    if isinstance(oos, float) and not np.isnan(oos) and oos > 5.0:
+        return f"过拟合 OOS/IS>{oos:.1f} (>5)"
+    stab = res.get("stability")
+    if isinstance(stab, float) and not np.isnan(stab) and stab < 0.0:
+        return f"失稳最差滚动ICIR={stab:.2f}(<0)"
+    return None
+
+
 def run_evolution(dry_run: bool = False) -> dict:
     run_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     try:
@@ -133,14 +152,15 @@ def run_evolution(dry_run: bool = False) -> dict:
             "turnover": to["turnover"],
             "net_ir": ls["net_ir"],
         }
-        # 坑1 修复：净成本信息比率<=0（或 NaN，不可交易/数值异常）的因子剔除
-        nir = ls["net_ir"]
-        if not (isinstance(nir, float) and not np.isnan(nir) and nir > 0):
+        # 更严格晋升门禁：净成本 IR 不可交易 / 过拟合(OOS 是 IS 的 >5 倍) / 失稳
+        # （滚动 worst ICIR<0）一律剔除，不写库、不入选。
+        dr = _factor_drop_reason(results[fid])
+        if dr:
             dropped_cost.append(fid)
 
     selected = [s for s in selected if s not in dropped_cost]
     if dropped_cost:
-        log.info("因净成本 IR<=0 剔除: %s", dropped_cost)
+        log.info("晋升门禁剔除(%d): %s", len(dropped_cost), dropped_cost)
     new_oos = float(np.nanmean([results[f]["oos_icir"] for f in selected])) \
         if selected else float("nan")
 
@@ -209,6 +229,15 @@ def run_evolution(dry_run: bool = False) -> dict:
     return out
 
 
+def _wechat(task: str, title: str, desp: str) -> None:
+    """微信推送结果（失败仅日志，不影响主流程）。"""
+    try:
+        from notify import send_wechat_daily
+        send_wechat_daily(task, title, desp)
+    except Exception as e:  # noqa: BLE001
+        log.warning("微信推送失败(忽略): %s", e)
+
+
 if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser(description="自动进化多因子筛选")
@@ -224,10 +253,24 @@ if __name__ == "__main__":
             dem = auto_demote(conn)
         print(json.dumps({"demoted": dem["demoted"], "kept": dem["kept"]},
                          ensure_ascii=False, indent=2, default=str))
+        dcodes = ", ".join(d[0] for d in dem["demoted"]) or "无"
+        _wechat(
+            "fireworks_sp_demote",
+            "🧬 fireworks 因子衰减降级",
+            f"移出 {len(dem['demoted'])} 个：{dcodes}\n保留 {len(dem['kept'])} 个",
+        )
     else:
         result = run_evolution(dry_run=not args.promote)
         print(json.dumps({k: v for k, v in result.items()
                           if k != "metrics"}, ensure_ascii=False, indent=2,
                           default=str))
-        if args.promote and not result.get("promoted"):
-            print("⚠ 未达晋升门控，未写入。reason:", result.get("reason"))
+        if args.promote:
+            if result.get("promoted"):
+                sel = result.get("selected") or []
+                desp = (f"晋升 {len(sel)} 个因子\nOOS={result.get('new_oos')}\n"
+                        f"因子: {', '.join(sel)}\n门控: {result.get('reason')}")
+                _wechat("fireworks_sp_evolve", "🧬 fireworks 因子进化晋升", desp)
+            else:
+                desp = (f"未达晋升门控，未写入。\nreason: {result.get('reason')}\n"
+                        f"候选 OOS={result.get('new_oos')}")
+                _wechat("fireworks_sp_evolve", "🧬 fireworks 因子进化未晋升", desp)

@@ -83,6 +83,14 @@ def daily_run(push=True):
     tracker.update_tracking()
     stats = tracker.summary_stats()
 
+    # 因子系统降级标记：活跃因子集为空/失效时，推荐为技术兜底打分
+    degraded = False
+    try:
+        with db.get_conn() as _c:
+            degraded = db.get_meta(_c, "factor_system_degraded") == "1"
+    except Exception:
+        degraded = False
+
     sent = False
     if push and recos:
         try:
@@ -91,7 +99,13 @@ def daily_run(push=True):
                 __import__("sys").path.insert(0, sys_path)
             from notify import send_wechat_daily
             title, desp = build_push_message(recos, stats)
+            if degraded:
+                title = "⚠️[因子降级] " + title
+                desp = ("> ⚠️ **活跃因子集为空/失效，本轮推荐为技术兜底打分，"
+                        "仅供参考，非因子系统产出。**\n\n" + desp)
             sent = send_wechat_daily("fireworks_sp", title, desp)
         except Exception as e:  # noqa: BLE001
             log.warning("push failed (ignored): %s", e)
+    if degraded:
+        log.warning("因子系统降级：本轮推荐为技术兜底打分")
     return recos, stats, sent

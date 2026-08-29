@@ -177,3 +177,35 @@ def test_run_evolution_dry_run_writes_nothing(tmp_path, monkeypatch):
         a = get_active_set(conn, "auto_evolve")
     assert n_log == 0, "dry_run 不应写进化日志"
     assert a is None, "dry_run 不应写 active_sets"
+
+
+# --------------------------------------------------------------------------
+# 更严格晋升门禁（过拟合/失稳硬剔除）
+# --------------------------------------------------------------------------
+class TestFactorDropReason:
+    def test_healthy_factor_kept(self):
+        res = {"net_ir": 1.2, "oos_is_ratio": 1.5, "stability": 0.3}
+        assert AE._factor_drop_reason(res) is None
+
+    def test_nonpositive_net_ir_dropped(self):
+        assert AE._factor_drop_reason({"net_ir": 0.0, "stability": 0.3}) \
+            is not None
+        assert AE._factor_drop_reason({"net_ir": float("nan"), "stability": 0.3}) \
+            is not None
+
+    def test_overfit_high_oos_is_ratio_dropped(self):
+        res = {"net_ir": 2.0, "oos_is_ratio": 9.0, "stability": 0.5}
+        reason = AE._factor_drop_reason(res)
+        assert reason is not None and "过拟合" in reason
+
+    def test_unstable_negative_worst_icir_dropped(self):
+        res = {"net_ir": 1.0, "oos_is_ratio": 1.2, "stability": -0.4}
+        reason = AE._factor_drop_reason(res)
+        assert reason is not None and "失稳" in reason
+
+    def test_normal_factors_not_dropped(self):
+        specs = [
+            {"net_ir": 0.8, "oos_is_ratio": 2.0, "stability": 0.1},
+            {"net_ir": 1.5, "oos_is_ratio": 4.9, "stability": 0.0},
+        ]
+        assert all(AE._factor_drop_reason(s) is None for s in specs)

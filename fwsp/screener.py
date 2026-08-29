@@ -151,8 +151,10 @@ def run_screen(top_n=10, persist: bool = True) -> list[dict]:
                 r2["reasons"] = mf_reasons[code]
                 r2["close"] = r.get("price")  # 推荐页价格取自 spot.price
                 scored.append(r2)
+            # 活跃因子集有效 → 清除降级标记
+            set_meta(conn, "factor_system_degraded", "0")
         else:
-            log.info("无 active_factors，回退硬编码反转打分")
+            log.warning("无 active_factors，回退硬编码反转打分（因子系统降级）")
             for r in liquid:
                 rows = conn.execute(
                     "SELECT date,open,high,low,close,volume,amount FROM daily "
@@ -168,6 +170,8 @@ def run_screen(top_n=10, persist: bool = True) -> list[dict]:
                 r2["score"] = sc
                 r2["reasons"] = reasons
                 scored.append(r2)
+            # 活跃因子集为空/失效 → 标记降级，供 dashboard 横幅与微信告警读取
+            set_meta(conn, "factor_system_degraded", "1")
 
         scored.sort(key=lambda x: x["score"], reverse=True)
         top = apply_industry_cap(scored, top_n, FILTERS["max_per_industry"])

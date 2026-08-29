@@ -35,8 +35,12 @@ def load_meta():
             "(SELECT COUNT(DISTINCT code) FROM daily),"
             "(SELECT MAX(date) FROM daily),"
             "(SELECT value FROM meta WHERE key='last_update')").fetchone()
+        degraded = conn.execute(
+            "SELECT value FROM meta WHERE key='factor_system_degraded'"
+        ).fetchone()
     return {"stocks": row[0], "codes": row[1], "last_bar": row[2],
-            "last_update": row[3]}
+            "last_update": row[3],
+            "degraded": (degraded[0] == "1") if degraded else False}
 
 
 @st.cache_data(ttl=300)
@@ -127,6 +131,10 @@ with st.sidebar:
     st.caption("候选池生成器，非投资建议。\n买入需独立判断并严格止损。")
 
 # ---------------------------------------------------------------- pages
+
+if meta.get("degraded"):
+    st.warning("⚠️ **因子系统降级**：活跃因子集为空/失效，当前推荐为技术兜底打分"
+               "（非因子系统产出），仅供参考。请检查 auto_evolve 晋升任务与微信告警。")
 
 if page == "今日推荐":
     section_title(f"今日 Top {FILTERS['top_n']} 候选")

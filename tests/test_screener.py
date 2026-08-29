@@ -1,6 +1,60 @@
+import numpy as np
+import pandas as pd
 import pytest
 
-from fwsp.screener import apply_industry_cap, passes_hard_filters, score_technical
+from fwsp import config as cfg
+from fwsp import db as fwdb
+from fwsp.screener import (apply_industry_cap, passes_hard_filters,
+                           score_technical, run_screen)
+
+
+def _seed_screenable_db(path, code="000001"):
+    with fwdb.get_conn(path) as conn:
+        fwdb.init_schema(conn)
+        conn.execute(
+            "INSERT INTO stock_list(code,name,industry,exchange,is_st) "
+            "VALUES (?,?,?,?,?)", (code, "测试", "银行", "sz", 0))
+        conn.execute(
+            "INSERT INTO spot(code,price,pe_dyn,pb,total_mv,circ_mv,turnover) "
+            "VALUES (?,?,?,?,?,?,?)", (code, 10.0, 20.0, 2.0, 100e8, 80e8, 2.0))
+        conn.execute(
+            "INSERT INTO fin_q(code,period,roe,debt_ratio,gross_margin,profit_yoy) "
+            "VALUES (?,?,?,?,?,?)", (code, "2026Q1", 12.0, 50.0, 30.0, 10.0))
+        dates = pd.date_range("2024-01-01", periods=140, freq="D")
+        closes = np.linspace(8, 12, len(dates))
+        rows = [(code, str(d.date()), closes[i] * 0.99, closes[i] * 1.01,
+                 closes[i] * 0.98, closes[i], 1e6, 1e8)
+                for i, d in enumerate(dates)]
+        conn.executemany(
+            "INSERT INTO daily(code,date,open,high,low,close,volume,amount) "
+            "VALUES (?,?,?,?,?,?,?,?)", rows)
+        conn.commit()
+
+
+class TestFactorSystemDegradedMeta:
+    def test_no_active_factors_sets_degraded(self, monkeypatch, tmp_path):
+        db_path = tmp_path / "screen.db"
+        _seed_screenable_db(db_path)
+        monkeypatch.setattr(cfg, "DB_PATH", db_path)
+        # 无 active_factors → multifactor_scores 返回空 → 回退兜底分支
+        monkeypatch.setattr(
+            "fwsp.screener.multifactor_scores",
+            lambda c, codes: ({}, {}))
+        run_screen(top_n=10, persist=True)
+        with fwdb.get_conn(db_path) as conn:
+            assert fwdb.get_meta(conn, "factor_system_degraded") == "1"
+
+    def test_active_factors_clears_degraded(self, monkeypatch, tmp_path):
+        db_path = tmp_path / "screen.db"
+        _seed_screenable_db(db_path)
+        monkeypatch.setattr(cfg, "DB_PATH", db_path)
+        # 有 active_factors → 多因子合成分支 → 清除降级标记
+        monkeypatch.setattr(
+            "fwsp.screener.multifactor_scores",
+            lambda c, codes: ({"000001": 90.0}, {"000001": ["测试因子"]}))
+        run_screen(top_n=10, persist=True)
+        with fwdb.get_conn(db_path) as conn:
+            assert fwdb.get_meta(conn, "factor_system_degraded") == "0"
 
 CFG = {
     "min_total_mv": 50e8,
