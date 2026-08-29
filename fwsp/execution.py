@@ -88,14 +88,17 @@ def long_short_backtest(factor: pd.DataFrame, fwd: pd.DataFrame,
 
     与 run_backtest / walk_forward_backtest 共用同一组 COST_BUY/COST_SELL 常量，
     统一落到 execution 层。每日按因子截面排名多前 top_frac、空后 top_frac，
-    净双边交易成本。返回净信息比率(net_ir)作为「可交易性」真实量度。
+    次日开盘调仓。日频调仓下多空双腿各 100% 换手，故每日总交易成本按
+    2×(cost_buy+cost_sell) 计（多腿 + 空腿各一轮买卖），比单边模型更严格、
+    更贴近实盘——直接抬高「净成本 IR」门禁，过滤不可交易因子。
     """
     r = factor.rank(axis=1, pct=True)
     long_sig = r >= (1 - top_frac)
     short_sig = r <= top_frac
     long_ret = fwd.where(long_sig).mean(axis=1)
     short_ret = fwd.where(short_sig).mean(axis=1)
-    port = (long_ret - short_ret).dropna() - (cost_buy + cost_sell)
+    daily_cost = 2 * (cost_buy + cost_sell)
+    port = (long_ret - short_ret).dropna() - daily_cost
     port = port.dropna()
     if len(port) < 30 or port.std() == 0:
         return {"net_ir": float("nan"), "net_ret": float("nan")}

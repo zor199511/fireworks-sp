@@ -42,6 +42,14 @@ def _std(x: pd.DataFrame, n: float) -> pd.DataFrame:
     return x.rolling(int(n), min_periods=_mp(n)).std()
 
 
+def _ts_min(x: pd.DataFrame, n: float) -> pd.DataFrame:
+    return x.rolling(int(n), min_periods=_mp(n)).min()
+
+
+def _ts_max(x: pd.DataFrame, n: float) -> pd.DataFrame:
+    return x.rolling(int(n), min_periods=_mp(n)).max()
+
+
 def _zscore(x: pd.DataFrame, n: float) -> pd.DataFrame:
     n = int(n)
     m = x.rolling(n, min_periods=_mp(n)).mean()
@@ -115,7 +123,8 @@ def _corr(a: pd.DataFrame, b: pd.DataFrame, n: float) -> pd.DataFrame:
 
 
 OPERATORS = {
-    "sma": _sma, "ema": _ema, "std": _std, "zscore": _zscore,
+    "sma": _sma, "ts_mean": _sma, "ts_min": _ts_min, "ts_max": _ts_max,
+    "ema": _ema, "std": _std, "zscore": _zscore,
     "ts_rank": _ts_rank, "cs_rank": _cs_rank, "cs_zscore": _cs_zscore,
     "ref": _ref, "sign": _sign, "corr": _corr, "min": _min, "max": _max,
     "div": _div, "sub": _sub, "add": _add, "abs": _abs, "returns": _returns,

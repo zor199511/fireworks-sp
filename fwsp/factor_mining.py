@@ -236,6 +236,12 @@ def screen_factors(panels: dict[str, pd.DataFrame],
 def oos_guard(new_oos: float | None, old_oos: float | None,
               min_lift: float = 0.02) -> tuple[bool, str]:
     if old_oos is None:
+        # 首跑也须是「真实可交易」信号：OOS 数值异常或净 IR 不达标则拒绝，
+        # 避免以 NaN/负 OOS 晋升空活跃集（更严格门禁）。
+        if not isinstance(new_oos, (int, float)) or np.isnan(new_oos):
+            return False, "首次运行但 OOS 含 NaN/异常，拒绝晋升"
+        if new_oos <= 0:
+            return False, "首次运行但 OOS<=0，拒绝晋升"
         return True, "首次运行，无历史基线"
     if not (isinstance(new_oos, (int, float)) and isinstance(old_oos, (int, float))):
         return False, "OOS 数值异常，拒绝晋升"

@@ -42,7 +42,7 @@ recipes:
   source: worldquant_alpha101
 - id: wq_a015
   category: momentum
-  expr: corr(ts_rank(volume,20), ts_rank(close/open,10), 5)
+  expr: corr(ts_rank(volume,20), ts_rank(div(close, open),10), 5)
   desc: 'Alpha#015: 量与日内动量相关'
   source: worldquant_alpha101
 - id: wq_a019

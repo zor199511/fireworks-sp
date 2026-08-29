@@ -106,10 +106,10 @@ def walk_forward_backtest(zscores, ics, close, opn, low, quality, highs=None,
             held = i - pos["entry_i"]
             px_open = opn.at[d, code] if code in opn.columns else np.nan
             lo = low.at[d, code] if code in low.columns else np.nan
-            hi = (highs.at[d, code] if (highs is not None
-                                        and code in highs.columns) else np.nan)
+            hi_px = (highs.at[d, code] if (highs is not None
+                                           and code in highs.columns) else np.nan)
             sell_px, reason = decide_exit(
-                pos, px_open, lo, hi, stop_pct, profit_pct, trail, held,
+                pos, px_open, lo, hi_px, stop_pct, profit_pct, trail, held,
                 horizon)
             if sell_px is not None:
                 cash += sell_value(pos["shares"], sell_px)
@@ -120,9 +120,12 @@ def walk_forward_backtest(zscores, ics, close, opn, low, quality, highs=None,
 
         for code in positions:
             cpx = close.at[d, code] if code in close.columns else np.nan
+            hpx = (highs.at[d, code] if (highs is not None
+                                        and code in highs.columns) else cpx)
             if pd.notna(cpx):
                 pos = positions[code]
-                pos["peak"] = max(pos.get("peak", pos["buy_px"]), cpx)
+                peak_px = hpx if pd.notna(hpx) else cpx
+                pos["peak"] = max(pos.get("peak", pos["buy_px"]), peak_px)
 
         if rebal == 'M':
             rk = (d.year, d.month)

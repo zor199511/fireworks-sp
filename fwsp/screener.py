@@ -4,7 +4,6 @@ from datetime import date
 
 import pandas as pd
 
-from .config import DB_PATH
 from .db import get_conn, get_active_set, init_schema, set_meta, upsert_rows
 from .indicators import compute_features
 from .multifactor_score import multifactor_scores

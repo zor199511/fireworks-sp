@@ -73,8 +73,9 @@ def auto_demote(conn, stability_thr: float = 0.0, net_ir_thr: float = 0.0) -> di
         if stab is not None and not (isinstance(stab, float) and np.isnan(stab)) \
                 and stab < stability_thr:
             reasons.append(f"稳定性{stab:.2f}<{stability_thr}")
-        if nir is not None and not (isinstance(nir, float) and np.isnan(nir)) \
-                and nir <= net_ir_thr:
+        if not (isinstance(nir, float) and not np.isnan(nir)):
+            reasons.append("净IR非数值(NaN)")
+        elif nir <= net_ir_thr:
             reasons.append(f"净IR{nir:.2f}<={net_ir_thr}")
         if reasons:
             demoted.append((fid, "; ".join(reasons)))
@@ -132,9 +133,9 @@ def run_evolution(dry_run: bool = False) -> dict:
             "turnover": to["turnover"],
             "net_ir": ls["net_ir"],
         }
-        # 坑1 修复：净成本信息比率<=0 的因子不可交易，剔除（不写库/不入选）
-        if isinstance(ls["net_ir"], float) and not np.isnan(ls["net_ir"]) \
-                and ls["net_ir"] <= 0:
+        # 坑1 修复：净成本信息比率<=0（或 NaN，不可交易/数值异常）的因子剔除
+        nir = ls["net_ir"]
+        if not (isinstance(nir, float) and not np.isnan(nir) and nir > 0):
             dropped_cost.append(fid)
 
     selected = [s for s in selected if s not in dropped_cost]

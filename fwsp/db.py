@@ -2,7 +2,7 @@ import json
 import sqlite3
 from contextlib import contextmanager
 
-from .config import DB_PATH
+from . import config
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS stock_list (
@@ -95,8 +95,8 @@ CREATE TABLE IF NOT EXISTS evolution_log (
 
 
 @contextmanager
-def get_conn(db_path=DB_PATH):
-    conn = sqlite3.connect(db_path)
+def get_conn(db_path=None):
+    conn = sqlite3.connect(db_path or config.DB_PATH)
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA synchronous=NORMAL")
     try:
