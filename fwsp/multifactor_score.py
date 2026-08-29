@@ -15,7 +15,7 @@ from dataclasses import dataclass
 import numpy as np
 import pandas as pd
 
-from .db import get_conn, get_meta
+from .db import get_conn, get_active_set
 from .factor_factory import FactorSpec, compute_factor_panel
 
 log = logging.getLogger("fwsp.multifactor_score")
@@ -39,12 +39,13 @@ def load_panel_for_codes(conn, codes: list[str]) -> dict[str, pd.DataFrame]:
 
 
 def active_specs(conn) -> tuple[list[FactorSpec], dict[str, float]]:
-    """读取 meta[active_factors] 与 factor_eval 权重。
+    """读取 active_sets(来源 auto_evolve) 与 factor_eval 权重。
 
     返回 (specs, weights)。weights 用 |net_ir|（缺失时回退 |is_icir|），
     全为 NaN/空时返回等权。无 active_factors 则返回 ([], {}) 由调用方回退。
     """
-    raw = get_meta(conn, "active_factors")
+    aset = get_active_set(conn, "auto_evolve")
+    raw = json.dumps(aset["factors"]) if aset else None
     if not raw:
         return [], {}
     ids = json.loads(raw)

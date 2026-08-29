@@ -5,14 +5,14 @@ from datetime import date
 import pandas as pd
 
 from .config import DB_PATH
-from .db import get_conn, init_schema, set_meta, upsert_rows
+from .db import get_conn, get_active_set, init_schema, set_meta, upsert_rows
 from .indicators import compute_features
 from .multifactor_score import multifactor_scores
 
 log = logging.getLogger("fwsp.screener")
 
 RECO_COLS = ["run_date", "rank", "code", "name", "industry", "score",
-             "price", "reasons", "metrics"]
+              "price", "reasons", "metrics", "factor_set_id"]
 
 
 # ------------------------------------------------------------ hard filters
@@ -182,6 +182,9 @@ def run_screen(top_n=10) -> list[dict]:
 
 def _persist(conn, top: list[dict]):
     run_date = str(date.today())
+    # 血缘：记录本次推荐所用的活跃因子集（来源 auto_evolve）
+    aset = get_active_set(conn, "auto_evolve")
+    factor_set_id = aset["run_at"] if aset else None
     conn.execute("DELETE FROM recommendations WHERE run_date=?", (run_date,))
     rows = []
     for i, r in enumerate(top, 1):
@@ -193,7 +196,7 @@ def _persist(conn, top: list[dict]):
         rows.append((run_date, i, r["code"], r.get("name"),
                      r.get("industry"), r["score"], r["close"],
                      json.dumps(r["reasons"], ensure_ascii=False),
-                     json.dumps(metrics, ensure_ascii=False)))
+                     json.dumps(metrics, ensure_ascii=False), factor_set_id))
     upsert_rows(conn, RECO_TABLE, RECO_COLS, rows)
     set_meta(conn, "last_recommend_run", run_date)
 

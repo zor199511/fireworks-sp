@@ -16,8 +16,8 @@ import numpy as np
 
 from fwsp.backtest import load_panels
 from fwsp.config import FILTERS
-from fwsp.db import (get_conn, get_meta, init_schema, set_meta,
-                     upsert_rows)
+from fwsp.db import (get_conn, get_active_set, init_schema,
+                      set_active_factors, upsert_rows)
 from fwsp.factor_factory import expand_recipes
 from fwsp.factor_mining import (daily_ic_series, factor_turnover,
                                 forward_returns, greedy_select, ic_analysis,
@@ -47,15 +47,12 @@ def auto_demote(conn, stability_thr: float = 0.0, net_ir_thr: float = 0.0) -> di
     稳定性(worst rolling ICIR) < thr 或 净成本 IR <= thr 则移出 active 集。
     返回 {"demoted":[(code,reason)...], "kept":[...]}。
     """
-    raw = get_meta(conn, "active_factors")
-    if not raw:
-        return {"demoted": [], "kept": [], "reason": "无 active_factors"}
-    try:
-        ids = json.loads(raw)
-    except (TypeError, ValueError):
-        return {"demoted": [], "kept": [], "reason": "active_factors 解析失败"}
+    aset = get_active_set(conn, "auto_evolve")
+    if not aset:
+        return {"demoted": [], "kept": [], "reason": "无 active_sets"}
+    ids = aset["factors"]
     if not ids:
-        return {"demoted": [], "kept": [], "reason": "active_factors 为空"}
+        return {"demoted": [], "kept": [], "reason": "active_sets 为空"}
 
     ph = ",".join("?" * len(ids))
     rows = conn.execute(
@@ -85,7 +82,8 @@ def auto_demote(conn, stability_thr: float = 0.0, net_ir_thr: float = 0.0) -> di
             kept.append(fid)
 
     if demoted:
-        set_meta(conn, "active_factors", json.dumps(kept, ensure_ascii=False))
+        set_active_factors(conn, kept, run_at=aset["run_at"],
+                          oos=aset["oos"], source=aset["source"])
         log.info("因子衰减降级: 移出 %s -> 保留 %s",
                  [d[0] for d in demoted], kept)
     return {"demoted": demoted, "kept": kept}
@@ -149,9 +147,9 @@ def run_evolution(dry_run: bool = False) -> dict:
         last = conn.execute(
             "SELECT new_oos FROM evolution_log ORDER BY run_at DESC LIMIT 1"
         ).fetchone()
-        old_active = get_meta(conn, "active_factors")
+        old_set = get_active_set(conn, "auto_evolve")
     old_oos = float(last[0]) if last and last[0] is not None else None
-    old_list = json.loads(old_active) if old_active else []
+    old_list = old_set["factors"] if old_set else []
 
     promote, reason = oos_guard(new_oos, old_oos)
     if not selected:
@@ -199,8 +197,9 @@ def run_evolution(dry_run: bool = False) -> dict:
                 "VALUES (?,?,?,?,?,?)",
                 (run_at, json.dumps(selected, ensure_ascii=False), old_oos,
                  new_oos, 1, reason))
-            set_meta(conn, "active_factors",
-                     json.dumps(selected, ensure_ascii=False))
+            # 唯一写入者：写 active_sets + 镜像 meta + 同步 factor_eval.selected
+            set_active_factors(conn, selected, run_at=run_at, oos=new_oos,
+                              source="auto_evolve")
             # 因子衰减自动降级：晋升后顺手清理已失效的活跃因子
             dem = auto_demote(conn)
             if dem["demoted"]:

@@ -7,7 +7,7 @@ import math
 import numpy as np
 import pandas as pd
 
-from .db import get_meta
+from .db import get_active_set
 
 
 def oos_is_ratio(is_icir: float | None, oos_icir: float | None) -> float:
@@ -64,18 +64,13 @@ def factor_health(rows: list[dict]) -> list[str]:
 
 
 def active_guard_status(conn) -> dict:
-    """读取 meta[active_factors]，汇总当前活跃因子的护栏状态。
+    """读取 active_sets(来源 auto_evolve)，汇总当前活跃因子的护栏状态。
 
     返回 {"count","alert_bad","alert_warn","messages"}。
     alert_bad: 净成本 IR<=0（不可交易）；alert_warn: 稳定性(worst rolling ICIR)<0。
     """
-    raw = get_meta(conn, "active_factors")
-    if not raw:
-        return {"count": 0, "alert_bad": 0, "alert_warn": 0, "messages": []}
-    try:
-        ids = json.loads(raw)
-    except (TypeError, ValueError):
-        return {"count": 0, "alert_bad": 0, "alert_warn": 0, "messages": []}
+    aset = get_active_set(conn, "auto_evolve")
+    ids = aset["factors"] if aset else []
     if not ids:
         return {"count": 0, "alert_bad": 0, "alert_warn": 0, "messages": []}
     ph = ",".join("?" * len(ids))

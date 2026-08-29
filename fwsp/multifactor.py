@@ -247,8 +247,13 @@ def mine_factors(factors, close, opn, low, fwd, quality, qpanel=None,
 
 def save_selected(conn, factors, summary=None):
     import json
-    from .db import set_meta
+    from datetime import datetime
+    from .db import set_meta, write_active_set
+    # 镜像 meta（dashboard 实时推荐仍读此）；同时记入 active_sets 作血缘追踪，
+    # source=research_mine 明确隔离，不影响每日推荐(走 auto_evolve 集)。
     set_meta(conn, "multifactor_selected", json.dumps(factors))
+    write_active_set(conn, datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                    factors, None, "research_mine")
     if summary is not None:
         set_meta(conn, "multifactor_summary", json.dumps(summary))
 

@@ -1,3 +1,4 @@
+import json
 import sqlite3
 from contextlib import contextmanager
 
@@ -52,7 +53,14 @@ CREATE TABLE IF NOT EXISTS recommendations (
     score REAL, price REAL,
     reasons TEXT, metrics TEXT,
     ret_5d REAL, ret_10d REAL, ret_20d REAL, ret_60d REAL,
+    factor_set_id TEXT,
     PRIMARY KEY (run_date, code)
+);
+CREATE TABLE IF NOT EXISTS active_sets (
+    run_at TEXT PRIMARY KEY,
+    factors_json TEXT NOT NULL,
+    oos REAL,
+    source TEXT
 );
 CREATE TABLE IF NOT EXISTS factor_library (
     code TEXT PRIMARY KEY,
@@ -107,6 +115,11 @@ def init_schema(conn):
             conn.execute(f"ALTER TABLE factor_eval ADD COLUMN {col}")
         except sqlite3.OperationalError:
             pass
+    # 旧库迁移：recommendations 增加 factor_set_id（因子集血缘）
+    try:
+        conn.execute("ALTER TABLE recommendations ADD COLUMN factor_set_id TEXT")
+    except sqlite3.OperationalError:
+        pass
 
 
 def upsert_rows(conn, table: str, cols: list[str], rows: list[tuple]):
@@ -127,6 +140,68 @@ def set_meta(conn, key: str, value: str):
     conn.execute(
         "INSERT OR REPLACE INTO meta (key,value) VALUES (?,?)", (key, str(value))
     )
+
+
+# --------------------------------------------------------------------------
+# active_sets：活跃因子集的单一真相源 + 单一写入者
+# --------------------------------------------------------------------------
+
+def write_active_set(conn, run_at: str, factors: list[str], oos=None,
+                    source: str = "auto_evolve") -> None:
+    conn.execute(
+        "INSERT OR REPLACE INTO active_sets (run_at, factors_json, oos, source) "
+        "VALUES (?,?,?,?)",
+        (run_at, json.dumps(list(factors), ensure_ascii=False), oos, source))
+
+
+def get_active_set(conn, source: str | None = None) -> dict | None:
+    sql = "SELECT run_at, factors_json, oos, source FROM active_sets"
+    args: tuple = ()
+    if source:
+        sql += " WHERE source=? "
+        args = (source,)
+    sql += " ORDER BY run_at DESC LIMIT 1"
+    row = conn.execute(sql, args).fetchone()
+    if not row:
+        # 过渡期回退：旧库可能只有 meta.active_factors（无 active_sets 表数据）
+        if source in (None, "auto_evolve"):
+            raw = get_meta(conn, "active_factors")
+            if raw:
+                try:
+                    factors = json.loads(raw)
+                except (TypeError, ValueError):
+                    factors = []
+                return {"run_at": None, "factors": factors,
+                        "oos": None, "source": "auto_evolve"}
+        return None
+    return {"run_at": row[0], "factors": json.loads(row[1]),
+            "oos": row[2], "source": row[3]}
+
+
+def _sync_selected(conn, factors: list[str]) -> None:
+    """factor_eval.selected 改为 active_sets 的派生字段：仅当前活跃因子
+    的最新评估行标 1，其余归 0，从根上消除状态漂移。"""
+    conn.execute("UPDATE factor_eval SET selected=0")
+    if factors:
+        ph = ",".join("?" * len(factors))
+        conn.execute(
+            f"UPDATE factor_eval SET selected=1 WHERE (code, run_at) IN ("
+            f"SELECT code, MAX(run_at) FROM factor_eval WHERE code IN ({ph}) "
+            f"GROUP BY code)", list(factors))
+
+
+def set_active_factors(conn, factors: list[str], run_at: str | None = None,
+                      oos=None, source: str = "auto_evolve") -> str:
+    """唯一写入者：写 active_sets + 镜像 meta.active_factors + 同步 selected。
+
+    自动进化与衰减降级都只走这里，保证 meta / factor_eval / 进化日志三处一致。
+    """
+    import datetime
+    run_at = run_at or datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    write_active_set(conn, run_at, factors, oos, source)
+    set_meta(conn, "active_factors", json.dumps(list(factors), ensure_ascii=False))
+    _sync_selected(conn, factors)
+    return run_at
 
 
 def load_daily(conn, code: str) -> "list[tuple]":
