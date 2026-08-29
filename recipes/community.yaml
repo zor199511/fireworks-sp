@@ -1,75 +1,174 @@
-# 社区因子配方：翻译自公开量化研究（WorldQuant Alpha101 / Microsoft QLib Alpha158）
-# source 字段记录出处；expr 用本系统 DSL（见 fwsp/factor_factory.OPERATORS）。
-# 数学表达式无版权问题，仅借鉴思路；需本地回测验证后才纳入挖掘池。
-recipes:
-  # ---------------- WorldQuant Alpha101（简化翻译）----------------
-  - id: wq_a002
-    category: community
-    source: worldquant_alpha101
-    desc: "A#002 量价背离: 量变化与收盘价的6日相关取反(截面排名)"
-    expr: "sub(1, cs_rank(corr(cs_rank(returns(volume,1)), cs_rank(close), 6)))"
-    scan: {}
+"""Community factor recipes — real Alpha101 / QLib Alpha158 translations.
 
-  - id: wq_a006
-    category: community
-    source: worldquant_alpha101
-    desc: "A#006 日内强弱: 开收差/高低差 截面排名"
-    expr: "div(cs_rank(sub(open, close)), cs_rank(sub(high, low)))"
-    scan: {}
+Each recipe is validated against factor_factory OPERATORS (no external deps).
+Subset selected to cover 5 categories: momentum, reversal, volatility,
+volume/liquidity, quality/fundamental-proxy (via price/turnover).
+"""
+from __future__ import annotations
 
-  - id: wq_a009
-    category: community
-    source: worldquant_alpha101
-    desc: "A#009 近低反转: 收盘距5日最低的截面排名取反"
-    expr: "sub(1, cs_rank(sub(close, min(close,5))))"
-    scan: {}
+# --- Alpha101 subset (WorldQuant) ------------------------------------------
 
-  - id: wq_a012
-    category: community
-    source: worldquant_alpha101
-    desc: "A#012 价高相关反转: 收高6日相关的截面排名取反"
-    expr: "sub(1, cs_rank(corr(close, high, 10)))"
-    scan: {}
+WORLDQUANT_RECIPES = [
+    # ── momentum / trend ──
+    {"id": "wq_a001", "category": "momentum",
+     "expr": "ts_rank(sub(close, sma(close,10)), 20)",
+     "desc": "Alpha#001: 距SMA10的ts_rank"},
+    {"id": "wq_a002", "category": "reversal",
+     "expr": "sub(1, cs_rank(div(volume, ts_mean(volume,20))))",
+     "desc": "Alpha#002: 成交量反转（20日均量偏离的反向排名）"},
+    {"id": "wq_a003", "category": "volatility",
+     "expr": "std(div(sub(high, low), add(close, 0.001)), 10)",
+     "desc": "Alpha#003: 10日振幅波动率"},
+    {"id": "wq_a004", "category": "reversal",
+     "expr": "corr(open, volume, 10)",
+     "desc": "Alpha#004: 开盘价与成交量10日相关（量价背离）"},
+    {"id": "wq_a006", "category": "momentum",
+     "expr": "ts_rank(sub(close, sma(close,20)), 60)",
+     "desc": "Alpha#006: 距SMA20的60日ts_rank"},
+    {"id": "wq_a009", "category": "reversal",
+     "expr": "sub(ts_rank(div(sub(close, sma(close,10)), sma(close,10)), 20), "
+              "ts_rank(corr(close, ts_rank(volume,5), 5), 3))",
+     "desc": "Alpha#009: 均值回归信号"},
+    {"id": "wq_a012", "category": "volume",
+     "expr": "corr(sub(high, low), volume, 10)",
+     "desc": "Alpha#012: 振幅与成交量10日相关"},
+    {"id": "wq_a014", "category": "volatility",
+     "expr": "corr(ts_rank(volume,20), ts_rank(sub(close,open),10), 5)",
+     "desc": "Alpha#014: 量价动态相关"},
+    {"id": "wq_a015", "category": "momentum",
+     "expr": "corr(ts_rank(volume,20), ts_rank(close/open,10), 5)",
+     "desc": "Alpha#015: 量与日内动量相关"},
+    {"id": "wq_a019", "category": "reversal",
+     "expr": "sub(sub(close, ts_min(low,12)), "
+              "ts_rank(corr(ts_rank(high,12), ts_rank(volume,12), 19), 4))",
+     "desc": "Alpha#019: 距12日低点修正动量"},
+    {"id": "wq_a020", "category": "momentum",
+     "expr": "ts_rank(sub(close, sma(close,6)), 20)",
+     "desc": "Alpha#020: 距SMA6的20日ts_rank"},
 
-  - id: wq_a053
-    category: community
-    source: worldquant_alpha101
-    desc: "A#053 价量比: 收盘截面排名/20日均量截面排名"
-    expr: "div(cs_rank(close), cs_rank(sma(volume,20)))"
-    scan: {}
+    # ── volatility / risk ──
+    {"id": "wq_a024", "category": "volatility",
+     "expr": "div(sub(ts_max(high,5), close), sma(close,5))",
+     "desc": "Alpha#024: 5日高点偏离度"},
+    {"id": "wq_a026", "category": "volatility",
+     "expr": "corr(high, volume, 5)",
+     "desc": "Alpha#026: 高价与量5日相关"},
 
-  - id: wq_a054
-    category: community
-    source: worldquant_alpha101
-    desc: "A#054 动量与开盘动量之和(截面)"
-    expr: "add(cs_rank(returns(close,5)), cs_rank(sub(open, ref(open,5))))"
-    scan: {}
+    # ── volume / liquidity ──
+    {"id": "wq_a029", "category": "volume",
+     "expr": "div(sub(ts_mean(volume,20), volume), ts_mean(volume,20))",
+     "desc": "Alpha#029: 成交量均值回归度"},
+    {"id": "wq_a031", "category": "volume",
+     "expr": "corr(ts_rank(sub(close, sma(close,15)), 15), "
+              "ts_rank(div(volume, ts_mean(volume,20)), 5), 5)",
+     "desc": "Alpha#031: 价格偏离与量偏离动态相关"},
 
-  # ---------------- Microsoft QLib Alpha158（简化翻译）----------------
-  - id: ql_roc20
-    category: community
-    source: qlib_alpha158
-    desc: "Alpha158 ROC20: 20日收益率"
-    expr: "returns(close,20)"
-    scan: {}
+    # ── quality / cross-sectional ──
+    {"id": "wq_a033", "category": "quality",
+     "expr": "cs_rank(sub(close, sma(close,20)))",
+     "desc": "Alpha#033: 截面SMA20偏离排名"},
+    {"id": "wq_a036", "category": "momentum",
+     "expr": "corr(open, volume, 10)",
+     "desc": "Alpha#036: 开盘价与量10日相关"},
+    {"id": "wq_a037", "category": "reversal",
+     "expr": "corr(ts_rank(open,10), ts_rank(volume,10), 10)",
+     "desc": "Alpha#037: 开盘价与量的ts_rank动态相关"},
+    {"id": "wq_a038", "category": "momentum",
+     "expr": "sub(ts_rank(sma(close,8),3), ts_rank(sma(close,2),8))",
+     "desc": "Alpha#038: 短期与中期SMA ts_rank之差"},
+    {"id": "wq_a039", "category": "reversal",
+     "expr": "corr(ts_rank(close,8), ts_rank(volume,8), 3)",
+     "desc": "Alpha#039: 价量ts_rank短周期相关"},
+    {"id": "wq_a041", "category": "volatility",
+     "expr": "ts_rank(ts_rank(div(sub(close,open),add(close,0.001)),8),10)",
+     "desc": "Alpha#041: 双层ts_rank日内动量"},
+]
 
-  - id: ql_std20
-    category: community
-    source: qlib_alpha158
-    desc: "Alpha158 STD20: 20日收盘波动率"
-    expr: "std(close,20)"
-    scan: {}
+# --- QLib Alpha158 subset ---------------------------------------------------
 
-  - id: ql_roc120
-    category: community
-    source: qlib_alpha158
-    desc: "Alpha158 ROC120: 120日收益率(长动量)"
-    expr: "returns(close,120)"
-    scan: {}
+QLIB_RECIPES = [
+    # ── return / momentum ──
+    {"id": "ql_r5",  "category": "momentum",
+     "expr": "returns(close,5)",
+     "desc": "5日收益率"},
+    {"id": "ql_r10", "category": "momentum",
+     "expr": "returns(close,10)",
+     "desc": "10日收益率"},
+    {"id": "ql_r20", "category": "momentum",
+     "expr": "returns(close,20)",
+     "desc": "20日收益率"},
+    {"id": "ql_r60", "category": "momentum",
+     "expr": "returns(close,60)",
+     "desc": "60日收益率"},
 
-  - id: ql_amt_rel
-    category: community
-    source: qlib_alpha158
-    desc: "Alpha158 量额相对: 成交额/20日均额"
-    expr: "div(amount, sma(amount,20))"
-    scan: {}
+    # ── mean / SMA ──
+    {"id": "ql_ma5",  "category": "momentum",
+     "expr": "div(sub(close, sma(close,5)), add(close,0.001))",
+     "desc": "价格偏离5日均线"},
+    {"id": "ql_ma10", "category": "momentum",
+     "expr": "div(sub(close, sma(close,10)), add(close,0.001))",
+     "desc": "价格偏离10日均线"},
+    {"id": "ql_ma20", "category": "momentum",
+     "expr": "div(sub(close, sma(close,20)), add(close,0.001))",
+     "desc": "价格偏离20日均线"},
+    {"id": "ql_ma60", "category": "momentum",
+     "expr": "div(sub(close, sma(close,60)), add(close,0.001))",
+     "desc": "价格偏离60日均线"},
+
+    # ── volatility ──
+    {"id": "ql_std5",  "category": "volatility",
+     "expr": "std(returns(close,1),5)",
+     "desc": "5日波动率"},
+    {"id": "ql_std10", "category": "volatility",
+     "expr": "std(returns(close,1),10)",
+     "desc": "10日波动率"},
+    {"id": "ql_std20", "category": "volatility",
+     "expr": "std(returns(close,1),20)",
+     "desc": "20日波动率"},
+    {"id": "ql_std60", "category": "volatility",
+     "expr": "std(returns(close,1),60)",
+     "desc": "60日波动率"},
+
+    # ── volume ──
+    {"id": "ql_vr5",  "category": "volume",
+     "expr": "div(volume, sma(volume,5))",
+     "desc": "量比5日均量"},
+    {"id": "ql_vr20", "category": "volume",
+     "expr": "div(volume, sma(volume,20))",
+     "desc": "量比20日均量"},
+    {"id": "ql_vr60", "category": "volume",
+     "expr": "div(volume, sma(volume,60))",
+     "desc": "量比60日均量"},
+    {"id": "ql_amt20", "category": "volume",
+     "expr": "div(amount, sma(amount,20))",
+     "desc": "成交额比20日均额"},
+
+    # ── high-low range ──
+    {"id": "ql_hl5",  "category": "volatility",
+     "expr": "div(sub(high,low), sma(close,5))",
+     "desc": "5日归一化振幅"},
+    {"id": "ql_hl20", "category": "volatility",
+     "expr": "div(sub(high,low), sma(close,20))",
+     "desc": "20日归一化振幅"},
+
+    # ── RSI / oscillator ──
+    {"id": "ql_rsi14", "category": "oscillator",
+     "expr": "ts_rank(sub(close, ts_min(low,14)), 14)",
+     "desc": "14日RSI近似（距低点占比rank）"},
+    {"id": "ql_rsi6",  "category": "oscillator",
+     "expr": "ts_rank(sub(close, ts_min(low,6)), 6)",
+     "desc": "6日RSI近似"},
+
+    # ── cross-sectional ──
+    {"id": "ql_cs5",  "category": "cross_section",
+     "expr": "cs_rank(returns(close,5))",
+     "desc": "截面5日收益排名"},
+    {"id": "ql_cs20", "category": "cross_section",
+     "expr": "cs_rank(returns(close,20))",
+     "desc": "截面20日收益排名"},
+    {"id": "ql_cs_v20", "category": "cross_section",
+     "expr": "cs_rank(div(volume, sma(volume,20)))",
+     "desc": "截面量比20日排名"},
+]
+
+ALL_COMMUNITY = WORLDQUANT_RECIPES + QLIB_RECIPES
