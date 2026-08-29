@@ -158,5 +158,15 @@ def run_evolution(dry_run: bool = False) -> dict:
 
 
 if __name__ == "__main__":
+    import argparse
+    parser = argparse.ArgumentParser(description="自动进化多因子筛选")
+    parser.add_argument("--promote", action="store_true",
+                        help="非 dry-run：达到 OOS 门控则写入因子库并晋升 active_factors")
+    args = parser.parse_args()
     logging.basicConfig(level=logging.INFO)
-    print(run_evolution(dry_run=True))
+    result = run_evolution(dry_run=not args.promote)
+    print(json.dumps({k: v for k, v in result.items()
+                      if k != "metrics"}, ensure_ascii=False, indent=2,
+                      default=str))
+    if args.promote and not result.get("promoted"):
+        print("⚠ 未达晋升门控，未写入。reason:", result.get("reason"))
