@@ -20,7 +20,7 @@ inject_css()
 
 from fwsp.backtest import run_backtest  # noqa: E402
 from fwsp.config import FILTERS  # noqa: E402
-from fwsp.db import get_conn, init_schema  # noqa: E402
+from fwsp.db import get_conn, get_active_set, init_schema  # noqa: E402
 from fwsp.overfit_guard import active_guard_status  # noqa: E402
 from fwsp.tracker import summary_stats, update_tracking  # noqa: E402
 from fwsp import factors as F, multifactor as M  # noqa: E402
@@ -254,7 +254,9 @@ elif page == "策略回测":
 
 elif page == "多因子策略":
     st.header("多因子策略（walk-forward 自动挖掘）")
-    selected = load_multifactor_meta()
+    with get_conn() as conn:
+        aset = get_active_set(conn, "auto_evolve")
+        selected = aset["factors"] if aset else []
     g = active_guard()
     if g["alert_bad"]:
         alert_banner(f"⛔ {g['alert_bad']} 个活跃因子净成本 IR≤0，"
@@ -263,7 +265,7 @@ elif page == "多因子策略":
         alert_banner(f"⚠ {g['alert_warn']} 个活跃因子稳定性转负，"
                      f"建议触发重新进化", "warning")
     if not selected:
-        st.warning("尚未挖掘因子。点下方「重新挖掘因子」生成（约 5 分钟）。")
+        st.warning("尚未晋升因子。等每周 auto_evolve 进化或点「重新挖掘因子」生成。")
     else:
         with get_conn() as conn:
             raw = conn.execute(
@@ -271,7 +273,7 @@ elif page == "多因子策略":
             ).fetchone()
         import json
         summ = json.loads(raw[0]) if raw else None
-        st.caption("选中因子: " + ", ".join(selected))
+        st.caption("活跃因子集(active_sets): " + ", ".join(selected))
         if summ:
             oos_ret = summ['oos_total_return']*100
             oos_sh = summ['oos_sharpe']
@@ -285,28 +287,28 @@ elif page == "多因子策略":
                 {"label": "OOS 回撤", "value": f"{summ['oos_max_drawdown']*100:.1f}%"},
                 {"label": "OOS 胜率", "value": f"{summ['oos_win_rate']*100:.0f}%"},
             ])
-            st.caption(f"样本外窗口 {summ['holdout']}→今；"
+            st.caption(f"研究挖掘样本外窗口 {summ['holdout']}→今；"
                        f"对比 IS 总收益 {summ['is_total_return']*100:+.1f}% / "
                        f"夏普 {summ['is_sharpe']:.2f}。非投资建议。")
 
     c1, c2 = st.columns(2)
     if c1.button("生成实时推荐", type="primary"):
-        with st.spinner("构建因子面板(首次约2分钟，之后缓存1小时)…"):
-            z, ic, close, opn, low, quality = build_multifactor()
-            recs = M.live_recommend(z, ic, close, opn, low, quality,
-                                    selected=selected)
+        with st.spinner("实时重算多因子打分(与每日推荐同一引擎)…"):
+            # P0-3：复用与每日推荐完全相同的单一打分路径(run_screen)，
+            # 不再走 M.live_recommend 的另一套 zscore/权重，杜绝两套结果互相矛盾。
+            from fwsp import screener as SC
+            recs = SC.run_screen(top_n=FILTERS["top_n"], persist=False)
         if not recs:
-            st.error("无可用推荐（因子未挖掘或市场数据不足）")
+            st.error("无可用推荐（无活跃因子或市场数据不足）")
         else:
-            st.success(f"实时 Top {len(recs)} 候选（信号日 "
-                       f"{str(close.index[-1].date())}）")
+            st.success(f"实时 Top {len(recs)} 候选（与每日推荐同引擎）")
             rows = [{"排名": i + 1, "代码": r["code"],
                      "综合分": round(r["score"], 2),
                      "因子贡献": ", ".join(r["reasons"])}
                     for i, r in enumerate(recs)]
             st.dataframe(rows, use_container_width=True, hide_index=True)
-            st.caption("因子贡献 = 各因子 z 分 × 训练窗 IC 权重，"
-                       "仅供研究。")
+            st.caption("因子贡献 = 各因子 z 分 × |净IR| 权重，"
+                       "与每日推荐一致。")
 
             # 组合层展示（模拟，非实盘）：按综合分绝对值归一化权重
             with card_container("模拟组合配置（研究用，非实盘）"):

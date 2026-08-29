@@ -109,7 +109,7 @@ def apply_industry_cap(scored: list[dict], top_n: int, cap: int) -> list[dict]:
     return picked
 
 
-def run_screen(top_n=10) -> list[dict]:
+def run_screen(top_n=10, persist: bool = True) -> list[dict]:
     from .config import FILTERS
     with get_conn() as conn:
         init_schema(conn)
@@ -176,7 +176,8 @@ def run_screen(top_n=10) -> list[dict]:
             r["rank"] = i
         log.info("final scored pool: %d; top %d selected",
                  len(scored), len(top))
-        _persist(conn, top)
+        if persist:
+            _persist(conn, top)
         return top
 
 
