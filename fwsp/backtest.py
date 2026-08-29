@@ -116,8 +116,8 @@ def _scores_asof(ind, d, strategy="momentum") -> pd.Series:
     return score[score > floor]
 
 
-def run_backtest(start="2024-01-01", end=None, top_n=10, hold_days=10,
-                 stop_pct=-8.0, capital=1_000_000.0,
+def run_backtest(start="2024-01-01", end=None, top_n=10, hold_days=5,
+                 stop_pct=-8.0, profit_pct=8.0, capital=1_000_000.0,
                  strategy="reversal") -> dict:
     today = str(date.today())
     end = end or today
@@ -130,6 +130,7 @@ def run_backtest(start="2024-01-01", end=None, top_n=10, hold_days=10,
     closes = panels["close"]
     opens = panels["open"]
     lows = panels["low"]
+    highs = panels["high"]
     ind = _panel_indicators(panels)
     ind["closes"] = closes
     ind["volumes"] = panels["volume"]
@@ -168,16 +169,32 @@ def run_backtest(start="2024-01-01", end=None, top_n=10, hold_days=10,
             held = i - pos["entry_i"]
             px_open = opens.at[d, code] if code in opens.columns else None
             lo = lows.at[d, code] if code in lows.columns else None
+            hi = highs.at[d, code] if code in highs.columns else None
             stop_px = pos["buy_px"] * (1 + stop_pct / 100)
 
             sell_px = None
-            if held >= 1 and pd.notna(px_open) and pd.notna(lo):
-                if lo <= stop_px:
+            reason = None
+
+            if held >= 1 and pd.notna(px_open):
+                # 开盘跌破止损 → 直接止损
+                if px_open <= stop_px:
+                    sell_px = px_open
+                    reason = "stop"
+                # 盘中触及止盈 → 以目标价卖出
+                elif profit_pct > 0 and pd.notna(hi):
+                    profit_px = pos["buy_px"] * (1 + profit_pct / 100)
+                    if hi >= profit_px:
+                        sell_px = profit_px
+                        reason = "take_profit"
+                # 盘中触及止损（未开盘破位）→ 以止损价卖出
+                elif pd.notna(lo) and lo <= stop_px:
                     sell_px = min(px_open, stop_px)
                     reason = "stop"
+                # 持有到期 → 开盘卖出
                 elif held >= hold_days:
                     sell_px = px_open
                     reason = "expire"
+            # 被困：持有 2 倍天数按买入价强制平仓
             elif held >= hold_days * 2:
                 sell_px = pos["buy_px"]
                 reason = "stuck"

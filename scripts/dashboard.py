@@ -172,15 +172,17 @@ elif page == "策略回测":
     st.caption("周度调仓 · Top10 等权 · T+1开盘买入 · 持有10日 · -8%止损 · "
                "含佣金/印花税/滑点。反转策略：超跌优质股企稳信号。"
                "注：基本面门槛未纳入历史重放，结果偏乐观。")
-    c1, c2, c3 = st.columns(3)
+    c1, c2, c3, c4 = st.columns(4)
     start = c1.text_input("开始日期", "2024-06-01")
-    hold = c2.number_input("持有天数", 5, 40, 10)
+    hold = c2.number_input("持有天数", 1, 40, 5)
     stop = c3.number_input("止损%", -30, -1, -8)
+    profit = c4.number_input("止盈%", 1, 30, 8)
     if st.button("运行回测", type="primary"):
         with st.spinner("回测中…"):
             try:
                 res = run_backtest(start=start, hold_days=int(hold),
-                                   stop_pct=float(stop))
+                                   stop_pct=float(stop),
+                                   profit_pct=float(profit))
                 st.session_state.bt = res
             except Exception as e:  # noqa: BLE001
                 st.error(f"回测失败: {e}")
