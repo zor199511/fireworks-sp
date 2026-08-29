@@ -340,8 +340,8 @@ elif page == "推荐追踪":
     with get_conn() as conn:
         hist = pd.read_sql(
             "SELECT run_date AS 日期, COUNT(*) AS 只数, "
-            "AVG(score) AS 平均分, AVG(ret_5d) AS 五日%, "
-            "AVG(ret_10d) AS 十日%, AVG(ret_20d) AS 廿日% "
+            "AVG(score) AS 平均分, AVG(ret_5d) AS 五日收益, "
+            "AVG(ret_10d) AS 十日收益, AVG(ret_20d) AS 廿日收益 "
             "FROM recommendations GROUP BY run_date ORDER BY run_date DESC",
             conn)
     st.dataframe(hist, use_container_width=True, hide_index=True)
