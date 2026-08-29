@@ -50,6 +50,22 @@ class TestMeta:
         assert db.get_meta(mem_conn, "nope") is None
 
 
+class TestGetConn:
+    def test_explicit_path_creates_db(self, tmp_path):
+        p = tmp_path / "explicit.db"
+        with db.get_conn(p) as conn:
+            db.init_schema(conn)
+            db.set_meta(conn, "k", "v")
+            assert db.get_meta(conn, "k") == "v"
+        assert p.exists(), "显式 path 应创建数据库文件"
+
+    def test_no_arg_reads_config_at_call_time(self):
+        # get_conn() 在调用时读 config.DB_PATH（非 import 时），保证可被测试重定向
+        with db.get_conn() as conn:
+            db.init_schema(conn)
+            assert db.get_meta(conn, "nope") is None
+
+
 class TestDailyQueries:
     def test_last_daily_dates(self, mem_conn):
         cols = ["code", "date", "open", "high", "low", "close",

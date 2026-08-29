@@ -125,3 +125,27 @@ def test_long_short_backtest_delegates_to_execution():
     # 成本常量同样来自 costs
     assert execution.long_short_backtest.__defaults__[1] is costs.COST_BUY
     assert execution.long_short_backtest.__defaults__[2] is costs.COST_SELL
+
+
+def test_long_short_backtest_cost_is_two_legged():
+    # 锁定「日频调仓多空双腿各一轮买卖 → 日成本 = 2×(cost_buy+cost_sell)」。
+    # 回归保护：回退到 1× 或放大到 10× 都会让本测试翻红。
+    n, codes = 300, 20
+    idx = pd.date_range("2024-01-01", periods=n, freq="D")
+    cols = [f"{c:06d}" for c in range(codes)]
+    rng = np.random.default_rng(3)
+    f = pd.DataFrame(rng.standard_normal((n, codes)), index=idx, columns=cols)
+    fwd = pd.DataFrame(rng.standard_normal((n, codes)) * 0.01, index=idx,
+                       columns=cols)
+    r0 = long_short_backtest(f, fwd, cost_buy=0.0, cost_sell=0.0)
+    X, Y = 0.001, 0.002
+    r1 = long_short_backtest(f, fwd, cost_buy=X, cost_sell=Y)
+    # 重建零成本组合序列，取其标准差（常数平移不改变 std）
+    r = f.rank(axis=1, pct=True)
+    long_ret = fwd.where(r >= 0.9).mean(axis=1)
+    short_ret = fwd.where(r <= 0.1).mean(axis=1)
+    port_gross = (long_ret - short_ret).dropna()
+    std_g = port_gross.std()
+    expected_drop = 2 * (X + Y) / std_g * np.sqrt(252)
+    assert abs((r0["net_ir"] - r1["net_ir"]) - expected_drop) < 1e-9, \
+        f"成本差应严格等于 2×(X+Y)/std×√252，实得 {r0['net_ir'] - r1['net_ir']}"

@@ -59,14 +59,15 @@ def decide_exit(pos: dict, px_open, lo, hi, stop_pct: float,
     - 被困兜底：仅当开盘价缺失（数据缺口）且持有达 stuck_after 时，
       以买入价强平——正常行情下到期先触发，此分支为数据缺失安全网。
     """
-    stop_px = pos["buy_px"] * (1 + stop_pct / 100)
     peak = pos.get("peak", pos["buy_px"])
     expire_h = horizon - 1 if horizon > 1 else horizon
     if held >= 1 and pd.notna(px_open):
-        if px_open <= stop_px:
-            return px_open, "stop"
-        if pd.notna(lo) and lo <= stop_px:
-            return min(px_open, stop_px), "stop"
+        if stop_pct is not None:
+            stop_px = pos["buy_px"] * (1 + stop_pct / 100)
+            if px_open <= stop_px:
+                return px_open, "stop"
+            if pd.notna(lo) and lo <= stop_px:
+                return min(px_open, stop_px), "stop"
         if trail and trail > 0 and pd.notna(lo) \
                 and lo <= peak * (1 - trail / 100):
             return min(px_open, peak * (1 - trail / 100)), "trail"

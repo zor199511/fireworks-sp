@@ -99,6 +99,7 @@ def get_conn(db_path=None):
     conn = sqlite3.connect(db_path or config.DB_PATH)
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA synchronous=NORMAL")
+    conn.execute("PRAGMA busy_timeout=5000")  # 防并发 timer/查询重叠时 database is locked
     try:
         yield conn
         conn.commit()

@@ -3,7 +3,7 @@ import pandas as pd
 import pytest
 
 from fwsp.factor_factory import (FactorSpec, compute_factor, expand_recipes,
-                                 load_base_recipes)
+                                  load_base_recipes, _mp)
 
 
 def _panel(T=40, C=15, seed=0):
@@ -87,3 +87,22 @@ class TestComputeFactor:
         out = compute_factor(panels, spec)
         assert out.shape == panels["close"].shape
         assert not out.isna().all().all()
+
+
+class TestTsRollingOperators:
+    """ts_min/ts_max/ts_mean 必须与 pandas rolling 基准逐点一致（补全算子后锁定）。"""
+
+    def test_ts_min_max_mean_match_pandas(self):
+        panels = _panel(T=60, C=10, seed=3)
+        w = 5
+        mp = _mp(w)
+        cases = {
+            "ts_min": lambda s: s.rolling(w, min_periods=mp).min(),
+            "ts_max": lambda s: s.rolling(w, min_periods=mp).max(),
+            "ts_mean": lambda s: s.rolling(w, min_periods=mp).mean(),
+        }
+        for op, fn in cases.items():
+            out = compute_factor(panels, FactorSpec(f"t_{op}", "t",
+                                                    f"{op}(close,5)", {}, ""))
+            exp = fn(panels["close"])
+            assert out.round(8).equals(exp.round(8)), f"{op} 与 pandas 基准不一致"

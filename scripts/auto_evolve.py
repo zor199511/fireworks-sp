@@ -201,10 +201,9 @@ def run_evolution(dry_run: bool = False) -> dict:
             # 唯一写入者：写 active_sets + 镜像 meta + 同步 factor_eval.selected
             set_active_factors(conn, selected, run_at=run_at, oos=new_oos,
                               source="auto_evolve")
-            # 因子衰减自动降级：晋升后顺手清理已失效的活跃因子
-            dem = auto_demote(conn)
-            if dem["demoted"]:
-                out["demoted"] = dem["demoted"]
+            # 注意：晋升当轮不再顺手跑 auto_demote —— 新晋因子刚通过 net_ir>0
+            # 与 oos_guard，其滚动 ICIR 的「worst」可能因某段历史为负而被误杀，
+            # 导致刚写入的活跃集被当轮清空。衰减检查交由独立定时任务（--demote）负责。
         log.info("已写入 %d 个因子并晋升", len(selected))
 
     return out

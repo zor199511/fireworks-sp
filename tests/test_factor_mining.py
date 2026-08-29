@@ -129,3 +129,12 @@ class TestOosGuard:
     def test_first_run_promotes(self):
         ok, msg = oos_guard(0.08, None)
         assert ok and "首次" in msg
+
+    def test_first_run_rejects_nan(self):
+        # 首跑 OOS 为 NaN 也须拒绝（不应晋升空活跃集）
+        ok, msg = oos_guard(float("nan"), None)
+        assert not ok and "NaN" in msg
+
+    def test_first_run_rejects_nonpositive(self):
+        assert not oos_guard(-0.05, None)[0]
+        assert not oos_guard(0.0, None)[0]

@@ -61,3 +61,24 @@ def test_auto_demote_removes_decayed_only():
     assert sel[("A", "2026-02-01 00:00:00")] == 0
     assert sel[("B", "2026-02-01 00:00:00")] == 1
     conn.close()
+
+
+def test_auto_demote_removes_nan_net_ir():
+    # 本轮修复点：net_ir 为 NULL/NaN 的活跃因子须被降级（不可交易/数值异常）
+    conn = sqlite3.connect(":memory:")
+    init_schema(conn)
+    conn.execute(
+        "INSERT INTO factor_eval "
+        "(code,run_at,is_icir,oos_icir,oos_is_ratio,stability,turnover,net_ir,selected) "
+        "VALUES ('D','2026-02-01 00:00:00',0.5,0.4,0.8,0.5,0.1,NULL,0)")
+    set_active_factors(conn, ["D"], run_at="2026-02-02 00:00:00",
+                         oos=0.7, source="auto_evolve")
+
+    dem = auto_demote(conn)
+    assert ("D",) in [(c, ) for c, _ in dem["demoted"]]
+    aset = get_active_set(conn, "auto_evolve")
+    assert aset["factors"] == []
+    # 降级后 selected 同步归 0
+    sel = conn.execute("SELECT selected FROM factor_eval WHERE code='D'").fetchone()[0]
+    assert sel == 0
+    conn.close()
