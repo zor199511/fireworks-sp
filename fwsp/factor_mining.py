@@ -11,6 +11,7 @@ import numpy as np
 import pandas as pd
 
 from .costs import COST_BUY, COST_SELL
+from .execution import long_short_backtest as _exec_long_short
 from .factor_factory import compute_factor
 from .overfit_guard import oos_is_ratio
 
@@ -197,23 +198,13 @@ def long_short_backtest(factor: pd.DataFrame, fwd: pd.DataFrame,
                         cost_buy: float = COST_BUY,
                         cost_sell: float = COST_SELL,
                         top_frac: float = 0.1) -> dict:
-    """成本敏感的多空组合：每日按因子截面排名多前 top_frac、空后 top_frac，
-    净双边交易成本。返回净信息比率(net_ir)作为「可交易性」真实量度——
-    弥补 IC(秩相关)不随统一成本变化的盲区。
+    """成本敏感的多空组合（晋升 net_ir 量度）。
 
-    成本模型保守假设每日全换仓：多空两端各承担单边成本。
+    实现已统一落在 `execution.long_short_backtest`，此处仅做签名兼容转发，
+    确保全系统回测成本/执行语义单一来源（见 fwsp/execution.py）。
     """
-    r = factor.rank(axis=1, pct=True)
-    long_sig = r >= (1 - top_frac)
-    short_sig = r <= top_frac
-    long_ret = fwd.where(long_sig).mean(axis=1)
-    short_ret = fwd.where(short_sig).mean(axis=1)
-    port = (long_ret - short_ret).dropna() - (cost_buy + cost_sell)
-    port = port.dropna()
-    if len(port) < 30 or port.std() == 0:
-        return {"net_ir": float("nan"), "net_ret": float("nan")}
-    return {"net_ir": float(port.mean() / port.std() * np.sqrt(252)),
-            "net_ret": float(port.mean() * 252)}
+    return _exec_long_short(factor, fwd, top_frac=top_frac,
+                            cost_buy=cost_buy, cost_sell=cost_sell)
 
 
 # --------------------------------------------------------------------------

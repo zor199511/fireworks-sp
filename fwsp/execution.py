@@ -4,6 +4,7 @@
 都调用本模块，确保两套回测对「买卖成本 / 止损 / 止盈 / 滑点」的处理完全一致，
 不再各自实现导致口径漂移。
 """
+import numpy as np
 import pandas as pd
 
 from .costs import COST_BUY, COST_SELL
@@ -75,3 +76,26 @@ def decide_exit(pos: dict, px_open, lo, hi, stop_pct: float,
     elif stuck_after and held >= stuck_after:
         return pos["buy_px"], "stuck"
     return None, None
+
+
+def long_short_backtest(factor: pd.DataFrame, fwd: pd.DataFrame,
+                       top_frac: float = 0.1, cost_buy: float = COST_BUY,
+                       cost_sell: float = COST_SELL) -> dict:
+    """成本敏感多空组合（晋升路径 net_ir 的量度）。
+
+    与 run_backtest / walk_forward_backtest 共用同一组 COST_BUY/COST_SELL 常量，
+    统一落到 execution 层。每日按因子截面排名多前 top_frac、空后 top_frac，
+    净双边交易成本。返回净信息比率(net_ir)作为「可交易性」真实量度。
+    """
+    r = factor.rank(axis=1, pct=True)
+    long_sig = r >= (1 - top_frac)
+    short_sig = r <= top_frac
+    long_ret = fwd.where(long_sig).mean(axis=1)
+    short_ret = fwd.where(short_sig).mean(axis=1)
+    port = (long_ret - short_ret).dropna() - (cost_buy + cost_sell)
+    port = port.dropna()
+    if len(port) < 30 or port.std() == 0:
+        return {"net_ir": float("nan"), "net_ret": float("nan")}
+    return {"net_ir": float(port.mean() / port.std() * np.sqrt(252)),
+            "net_ret": float(port.mean() * 252)}
+

@@ -97,3 +97,22 @@ def test_long_short_backtest_cost_source():
     # 默认成本单一来源自 costs
     assert long_short_backtest.__defaults__[0] is costs.COST_BUY
     assert long_short_backtest.__defaults__[1] is costs.COST_SELL
+
+
+def test_long_short_backtest_delegates_to_execution():
+    # 晋升路径的回测必须落到 execution 层（单一来源）
+    from fwsp import execution, factor_mining
+    n, codes = 200, 10
+    idx = pd.date_range("2024-01-01", periods=n, freq="D")
+    cols = [f"{c:06d}" for c in range(codes)]
+    rng = np.random.default_rng(7)
+    f = pd.DataFrame(rng.standard_normal((n, codes)), index=idx, columns=cols)
+    fwd = pd.DataFrame(rng.standard_normal((n, codes)) * 0.01, index=idx,
+                       columns=cols)
+    r_fm = factor_mining.long_short_backtest(f, fwd)
+    r_ex = execution.long_short_backtest(f, fwd)
+    assert abs(r_fm["net_ir"] - r_ex["net_ir"]) < 1e-12
+    assert abs(r_fm["net_ret"] - r_ex["net_ret"]) < 1e-12
+    # 成本常量同样来自 costs
+    assert execution.long_short_backtest.__defaults__[1] is costs.COST_BUY
+    assert execution.long_short_backtest.__defaults__[2] is costs.COST_SELL
