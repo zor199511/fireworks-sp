@@ -54,6 +54,35 @@ CREATE TABLE IF NOT EXISTS recommendations (
     ret_5d REAL, ret_10d REAL, ret_20d REAL, ret_60d REAL,
     PRIMARY KEY (run_date, code)
 );
+CREATE TABLE IF NOT EXISTS factor_library (
+    code TEXT PRIMARY KEY,
+    category TEXT,
+    expr TEXT,
+    params_json TEXT,
+    desc TEXT,
+    source TEXT,
+    created_at TEXT
+);
+CREATE TABLE IF NOT EXISTS factor_eval (
+    code TEXT,
+    run_at TEXT,
+    is_icir REAL,
+    oos_icir REAL,
+    oos_is_ratio REAL,
+    stability REAL,
+    turnover REAL,
+    net_ir REAL,
+    selected INTEGER,
+    PRIMARY KEY (code, run_at)
+);
+CREATE TABLE IF NOT EXISTS evolution_log (
+    run_at TEXT PRIMARY KEY,
+    selected_json TEXT,
+    old_oos REAL,
+    new_oos REAL,
+    promoted INTEGER,
+    notes TEXT
+);
 """
 
 
@@ -71,6 +100,13 @@ def get_conn(db_path=DB_PATH):
 
 def init_schema(conn):
     conn.executescript(SCHEMA)
+    # 旧库迁移：factor_eval 后续增加了 turnover / net_ir 列，CREATE IF NOT EXISTS
+    # 不会给已存在的表补列，这里幂等 ALTER（新库已含，捕获忽略）。
+    for col in ("turnover REAL", "net_ir REAL"):
+        try:
+            conn.execute(f"ALTER TABLE factor_eval ADD COLUMN {col}")
+        except sqlite3.OperationalError:
+            pass
 
 
 def upsert_rows(conn, table: str, cols: list[str], rows: list[tuple]):

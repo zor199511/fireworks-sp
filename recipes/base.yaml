@@ -1,0 +1,221 @@
+# 手工因子配方（WorldQuant 风格价量因子）
+# 占位符 {w}/{m} 由 factor_factory.expand_recipes 按 grid 扫描生成候选。
+# 算子清单见 fwsp/factor_factory.OPERATORS
+recipes:
+  # ---------------- volatility（波动率）----------------
+  - id: vol_std
+    category: volatility
+    desc: N日收益率标准差(波动率)
+    expr: "std(returns(close,1), {w})"
+    scan: {w: windows}
+
+  - id: vol_zscore
+    category: volatility
+    desc: N日收益 zscore
+    expr: "zscore(returns(close,1), {w})"
+    scan: {w: windows}
+
+  - id: vol_range
+    category: volatility
+    desc: N日振幅(high/low)波动率
+    expr: "std(div(high, low), {w})"
+    scan: {w: windows}
+
+  - id: vol_chg_abs
+    category: volatility
+    desc: N日|收益|的 zscore
+    expr: "zscore(abs(returns(close,1)), {w})"
+    scan: {w: windows}
+
+  - id: vol_amp
+    category: volatility
+    desc: 波动相对水平(波动/平均|收益|)
+    expr: "div(std(returns(close,1),{w}), sma(abs(returns(close,1)),{w}))"
+    scan: {w: windows}
+
+  # ---------------- price_position（价格位置）----------------
+  - id: pp_ma_dist
+    category: price_position
+    desc: 收盘价距 N日均线 zscore
+    expr: "zscore(close, {w})"
+    scan: {w: windows}
+
+  - id: pp_high
+    category: price_position
+    desc: 收盘价 / N日最高(贴近高位)
+    expr: "div(close, max(high,{w}))"
+    scan: {w: windows}
+
+  - id: pp_low
+    category: price_position
+    desc: 收盘价 / N日最低(贴近低位)
+    expr: "div(close, min(low,{w}))"
+    scan: {w: windows}
+
+  - id: pp_ma_ratio
+    category: price_position
+    desc: 短均线/长均线(动量位置)
+    expr: "div(sma(close,{w}), sma(close,{m}))"
+    scan: {w: windows, m: windows2}
+
+  - id: pp_csrank
+    category: price_position
+    desc: 收盘价 zscore 的截面排名
+    expr: "cs_rank(zscore(close,{w}))"
+    scan: {w: windows}
+
+  # ---------------- price_volume（量价）----------------
+  - id: pv_vol_z
+    category: price_volume
+    desc: 成交量 N日 zscore
+    expr: "zscore(volume, {w})"
+    scan: {w: windows}
+
+  - id: pv_amt_z
+    category: price_volume
+    desc: 成交额 N日 zscore
+    expr: "zscore(amount, {w})"
+    scan: {w: windows}
+
+  - id: pv_vol_ratio
+    category: price_volume
+    desc: 量能相对 N日均量
+    expr: "div(volume, sma(volume,{w}))"
+    scan: {w: windows}
+
+  - id: pv_amt_ratio
+    category: price_volume
+    desc: 额能相对 N日均额
+    expr: "div(amount, sma(amount,{w}))"
+    scan: {w: windows}
+
+  - id: pv_corr
+    category: price_volume
+    desc: 收益与量的 N日滚动相关(量价配合)
+    expr: "corr(returns(close,1), volume, {w})"
+    scan: {w: windows}
+
+  # ---------------- trend（趋势）----------------
+  - id: tr_ma_slope
+    category: trend
+    desc: 短ema/长ema(趋势斜率)
+    expr: "div(ema(close,{w}), ema(close,{m}))"
+    scan: {w: windows, m: windows2}
+
+  - id: tr_ema_diff
+    category: trend
+    desc: 长短 ema 差值(趋势强度)
+    expr: "sub(ema(close,{w}), ema(close,{m}))"
+    scan: {w: windows, m: windows2}
+
+  - id: tr_above_ma
+    category: trend
+    desc: 收盘价在 N均线之上(1)/之下(-1)
+    expr: "sign(sub(close, sma(close,{w})))"
+    scan: {w: windows}
+
+  - id: tr_high_brk
+    category: trend
+    desc: 收盘价突破 N日最高
+    expr: "sign(sub(close, max(high,{w})))"
+    scan: {w: windows}
+
+  - id: tr_low_brk
+    category: trend
+    desc: 收盘价跌破 N日最低
+    expr: "sign(sub(close, min(low,{w})))"
+    scan: {w: windows}
+
+  # ---------------- mean_reversion（均值回归）----------------
+  - id: mr_zscore_rev
+    category: mean_reversion
+    desc: 价格 zscore 取反(反转)
+    expr: "sub(0, zscore(close, {w}))"
+    scan: {w: windows}
+
+  - id: mr_csrank_rev
+    category: mean_reversion
+    desc: 价格 zscore 截面排名取反(反转)
+    expr: "sub(1, cs_rank(zscore(close,{w})))"
+    scan: {w: windows}
+
+  - id: mr_ret_reversal
+    category: mean_reversion
+    desc: 昨日收益反转信号
+    expr: "sub(0, ref(returns(close,1), 1))"
+    scan: {w: windows}
+
+  - id: mr_corr_pv
+    category: mean_reversion
+    desc: 收益与量变化的 N日相关反转
+    expr: "sub(0, corr(returns(close,1), returns(volume,1), {w}))"
+    scan: {w: windows}
+
+  # ---------------- liquidity / volume（量能高阶）----------------
+  - id: liq_vol_shock
+    category: liquidity
+    desc: 成交量相对自身均量的时序 zscore(放量/缩量)
+    expr: "zscore(div(volume, sma(volume,{w})), {w})"
+    scan: {w: windows}
+
+  - id: liq_vol_rel
+    category: liquidity
+    desc: 量能相对水平(量/均量)
+    expr: "div(volume, sma(volume,{w}))"
+    scan: {w: windows}
+
+  - id: liq_amt_trend
+    category: liquidity
+    desc: 成交额相对长均额偏离(资金流入)
+    expr: "zscore(div(amount, sma(amount,{m})), {w})"
+    scan: {w: windows, m: windows2}
+
+  - id: liq_vov
+    category: liquidity
+    desc: 量能波动率(量比的标准差)
+    expr: "std(div(volume, sma(volume,{w})), {w})"
+    scan: {w: windows}
+
+  # ---------------- intraday（日内结构）----------------
+  - id: id_amplitude
+    category: intraday
+    desc: 日内振幅(高低差/收盘)时序 zscore
+    expr: "zscore(div(sub(high, low), close), {w})"
+    scan: {w: windows}
+
+  - id: id_gap
+    category: intraday
+    desc: 隔夜跳空(今开-昨收)时序 zscore
+    expr: "zscore(sub(open, ref(close,1)), {w})"
+    scan: {w: windows}
+
+  - id: id_efficiency
+    category: intraday
+    desc: 收盘相对均价(VWAP代理)偏离
+    expr: "zscore(div(close, div(amount, volume)), {w})"
+    scan: {w: windows}
+
+  # ---------------- cross_section（截面相对）----------------
+  - id: cs_mom
+    category: cross_section
+    desc: N日收益截面排名(截面动量)
+    expr: "cs_rank(returns(close,{w}))"
+    scan: {w: windows}
+
+  - id: cs_amt_z
+    category: cross_section
+    desc: 成交额截面 zscore(大票效应)
+    expr: "cs_zscore(zscore(amount, {w}))"
+    scan: {w: windows}
+
+  - id: cs_trend
+    category: cross_section
+    desc: 短ema 截面 zscore(截面趋势强度)
+    expr: "cs_zscore(ema(close,{w}))"
+    scan: {w: windows}
+
+  - id: cs_vol_z
+    category: cross_section
+    desc: 成交量截面 zscore(关注度)
+    expr: "cs_zscore(zscore(volume, {w}))"
+    scan: {w: windows}

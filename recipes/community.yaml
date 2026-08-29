@@ -1,0 +1,75 @@
+# 社区因子配方：翻译自公开量化研究（WorldQuant Alpha101 / Microsoft QLib Alpha158）
+# source 字段记录出处；expr 用本系统 DSL（见 fwsp/factor_factory.OPERATORS）。
+# 数学表达式无版权问题，仅借鉴思路；需本地回测验证后才纳入挖掘池。
+recipes:
+  # ---------------- WorldQuant Alpha101（简化翻译）----------------
+  - id: wq_a002
+    category: community
+    source: worldquant_alpha101
+    desc: "A#002 量价背离: 量变化与收盘价的6日相关取反(截面排名)"
+    expr: "sub(1, cs_rank(corr(cs_rank(returns(volume,1)), cs_rank(close), 6)))"
+    scan: {}
+
+  - id: wq_a006
+    category: community
+    source: worldquant_alpha101
+    desc: "A#006 日内强弱: 开收差/高低差 截面排名"
+    expr: "div(cs_rank(sub(open, close)), cs_rank(sub(high, low)))"
+    scan: {}
+
+  - id: wq_a009
+    category: community
+    source: worldquant_alpha101
+    desc: "A#009 近低反转: 收盘距5日最低的截面排名取反"
+    expr: "sub(1, cs_rank(sub(close, min(close,5))))"
+    scan: {}
+
+  - id: wq_a012
+    category: community
+    source: worldquant_alpha101
+    desc: "A#012 价高相关反转: 收高6日相关的截面排名取反"
+    expr: "sub(1, cs_rank(corr(close, high, 10)))"
+    scan: {}
+
+  - id: wq_a053
+    category: community
+    source: worldquant_alpha101
+    desc: "A#053 价量比: 收盘截面排名/20日均量截面排名"
+    expr: "div(cs_rank(close), cs_rank(sma(volume,20)))"
+    scan: {}
+
+  - id: wq_a054
+    category: community
+    source: worldquant_alpha101
+    desc: "A#054 动量与开盘动量之和(截面)"
+    expr: "add(cs_rank(returns(close,5)), cs_rank(sub(open, ref(open,5))))"
+    scan: {}
+
+  # ---------------- Microsoft QLib Alpha158（简化翻译）----------------
+  - id: ql_roc20
+    category: community
+    source: qlib_alpha158
+    desc: "Alpha158 ROC20: 20日收益率"
+    expr: "returns(close,20)"
+    scan: {}
+
+  - id: ql_std20
+    category: community
+    source: qlib_alpha158
+    desc: "Alpha158 STD20: 20日收盘波动率"
+    expr: "std(close,20)"
+    scan: {}
+
+  - id: ql_roc120
+    category: community
+    source: qlib_alpha158
+    desc: "Alpha158 ROC120: 120日收益率(长动量)"
+    expr: "returns(close,120)"
+    scan: {}
+
+  - id: ql_amt_rel
+    category: community
+    source: qlib_alpha158
+    desc: "Alpha158 量额相对: 成交额/20日均额"
+    expr: "div(amount, sma(amount,20))"
+    scan: {}

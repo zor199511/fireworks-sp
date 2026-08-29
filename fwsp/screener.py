@@ -7,6 +7,7 @@ import pandas as pd
 from .config import DB_PATH
 from .db import get_conn, init_schema, set_meta, upsert_rows
 from .indicators import compute_features
+from .multifactor_score import multifactor_scores
 
 log = logging.getLogger("fwsp.screener")
 
@@ -122,7 +123,8 @@ def run_screen(top_n=10) -> list[dict]:
             survivors.append(r)
         log.info("after fundamental filters: %d", len(survivors))
 
-        scored = []
+        # 流动性预筛（与进化口径一致）：需 ≥130 日线 + 近 20 日日均额达标
+        liquid = []
         for r in survivors:
             rows = conn.execute(
                 "SELECT date,open,high,low,close,volume,amount FROM daily "
@@ -131,24 +133,49 @@ def run_screen(top_n=10) -> list[dict]:
                                              "close", "volume", "amount"])
             if len(df) < 130:
                 continue
-            ft = compute_features(df)
-            if not ft:
-                continue
-            amt20 = ft.get("amount_ma20") or 0
+            amt20 = df["amount"].astype(float).tail(20).mean()
             if amt20 < FILTERS["min_amount_20d"]:
                 continue
-            sc, reasons = score_technical(ft)
-            r2 = dict(r)
-            r2.update(ft)
-            r2["score"] = sc
-            r2["reasons"] = reasons
-            scored.append(r2)
+            liquid.append(r)
+
+        scored = []
+        mf_scores, mf_reasons = multifactor_scores(
+            conn, [r["code"] for r in liquid])
+        if mf_scores:
+            log.info("多因子合成模式: 候选 %d", len(mf_scores))
+            for r in liquid:
+                code = r["code"]
+                if code not in mf_scores:
+                    continue
+                r2 = dict(r)
+                r2["score"] = mf_scores[code]
+                r2["reasons"] = mf_reasons[code]
+                r2["close"] = r.get("price")  # 推荐页价格取自 spot.price
+                scored.append(r2)
+        else:
+            log.info("无 active_factors，回退硬编码反转打分")
+            for r in liquid:
+                rows = conn.execute(
+                    "SELECT date,open,high,low,close,volume,amount FROM daily "
+                    "WHERE code=? ORDER BY date", (r["code"],)).fetchall()
+                df = pd.DataFrame(rows, columns=["date", "open", "high", "low",
+                                                 "close", "volume", "amount"])
+                ft = compute_features(df)
+                if not ft:
+                    continue
+                sc, reasons = score_technical(ft)
+                r2 = dict(r)
+                r2.update(ft)
+                r2["score"] = sc
+                r2["reasons"] = reasons
+                scored.append(r2)
 
         scored.sort(key=lambda x: x["score"], reverse=True)
         top = apply_industry_cap(scored, top_n, FILTERS["max_per_industry"])
         for i, r in enumerate(top, 1):
             r["rank"] = i
-        log.info("final scored pool: %d; top %d selected", len(scored), len(top))
+        log.info("final scored pool: %d; top %d selected",
+                 len(scored), len(top))
         _persist(conn, top)
         return top
 

@@ -108,8 +108,8 @@ with st.sidebar:
     st.caption(f"数据更新: {meta['last_update'] or '—'}")
     st.caption(f"股票池 {meta['stocks']} | K线覆盖 {meta['codes']} | "
                f"最新交易日 {meta['last_bar'] or '—'}")
-    page = st.radio("页面", ["今日推荐", "个股查询", "策略回测",
-                             "多因子策略", "推荐追踪"],
+    page = st.radio("页面", ["今日推荐", "个股查询", "策略回测", "多因子策略",
+                             "推荐追踪", "因子进化", "因子库", "进化历史"],
                     label_visibility="collapsed")
     st.divider()
     st.caption("候选池生成器，非投资建议。\n买入需独立判断并严格止损。")
@@ -345,3 +345,161 @@ elif page == "推荐追踪":
             "FROM recommendations GROUP BY run_date ORDER BY run_date DESC",
             conn)
     st.dataframe(hist, use_container_width=True, hide_index=True)
+
+elif page == "因子进化":
+    st.header("因子进化 · 过拟合防护看板")
+    st.caption("自动挖掘因子的样本内(IS)/样本外(OOS)表现、净成本 IR、稳定性。"
+               "OOS/IS 比率过高(>5)疑似过拟合，过低(<0.3)样本外失效，标红告警。"
+               "净成本 IR(扣除交易费后的多空信息比率)<=0 的因子不可交易。")
+    with get_conn() as conn:
+        init_schema(conn)
+        rows = conn.execute(
+            "SELECT code, run_at, is_icir, oos_icir, oos_is_ratio, stability, "
+            "turnover, net_ir, selected FROM factor_eval "
+            "ORDER BY run_at DESC, oos_icir DESC"
+        ).fetchall()
+    if not rows:
+        st.info("还没有因子评估结果。先运行 scripts/auto_evolve.py 写入评估。")
+        st.stop()
+
+    df = pd.DataFrame(rows, columns=["code", "run_at", "is_icir", "oos_icir",
+                                     "oos_is_ratio", "stability", "turnover",
+                                     "net_ir", "selected"])
+    from fwsp.overfit_guard import ratio_alert
+    alerts = df.apply(
+        lambda r: ratio_alert(r["is_icir"], r["oos_icir"])[0], axis=1)
+    df["alert"] = alerts
+
+    # OOS/IS 比率条形图，告警标红
+    fig = go.Figure()
+    colors = df["alert"].map({True: "#ef4444", False: "#3b82f6"})
+    fig.add_trace(go.Bar(
+        x=df["code"], y=df["oos_is_ratio"],
+        marker_color=colors, name="OOS/IS"))
+    fig.add_hline(y=5.0, line_dash="dash", line_color="#ef4444",
+                  annotation_text="过拟合阈值 5.0")
+    fig.add_hline(y=0.3, line_dash="dash", line_color="#f59e0b",
+                  annotation_text="失效阈值 0.3")
+    fig.update_layout(height=420, margin=dict(l=8, r=8, t=16, b=8),
+                      xaxis_tickangle=-45, showlegend=False)
+    st.plotly_chart(fig, use_container_width=True)
+
+    # Pareto 散点：IS vs OOS ICIR，颜色=净成本 IR（可交易性）
+    fig2 = go.Figure()
+    fig2.add_trace(go.Scatter(
+        x=df["is_icir"], y=df["oos_icir"], mode="markers",
+        marker=dict(size=11, color=df["net_ir"], colorscale="RdYlGn",
+                    showscale=True, colorbar=dict(title="净成本IR"),
+                    line=dict(width=1, color="#0f172a")),
+        text=df["code"], hoverinfo="text+x+y"))
+    fig2.add_shape(type="line", x0=df["is_icir"].min(), y0=df["is_icir"].min(),
+                   x1=df["is_icir"].max(), y1=df["is_icir"].max(),
+                   line=dict(dash="dot", color="#64748b"))
+    fig2.update_layout(height=380, margin=dict(l=8, r=8, t=16, b=8),
+                       xaxis_title="IS ICIR", yaxis_title="OOS ICIR",
+                       title="Pareto: 样本内 vs 样本外（绿=净成本 IR 高）")
+    st.plotly_chart(fig2, use_container_width=True)
+
+    k1, k2, k3, k4 = st.columns(4)
+    k1.metric("评估因子数", len(df))
+    k2.metric("入选因子数", int(df["selected"].sum()))
+    k3.metric("告警因子数", int(df["alert"].sum()))
+    k4.metric("净成本IR<=0(不可交易)", int((df["net_ir"] <= 0).sum()))
+
+    st.subheader("因子明细")
+    show = df.copy()
+    for c in ("is_icir", "oos_icir", "oos_is_ratio", "stability",
+             "turnover", "net_ir"):
+        show[c] = show[c].round(3)
+    show = show[["code", "run_at", "is_icir", "oos_icir", "oos_is_ratio",
+                 "net_ir", "turnover", "stability", "selected", "alert"]]
+    st.dataframe(show, use_container_width=True, hide_index=True)
+
+elif page == "因子库":
+    st.header("因子库 · 候选因子总览")
+    st.caption("base.yaml（自建）+ community.yaml（WorldQuant/QLib 翻译）合并池。"
+               "颜色区分来源，条形为最新 OOS ICIR，红=净成本 IR≤0 不可交易。")
+    with get_conn() as conn:
+        init_schema(conn)
+        rows = conn.execute(
+            "SELECT l.code, l.category, l.source, l.desc, "
+            "e.is_icir, e.oos_icir, e.net_ir, e.stability, e.selected "
+            "FROM factor_library l "
+            "LEFT JOIN factor_eval e ON e.code=l.code AND e.run_at=("
+            "  SELECT MAX(run_at) FROM factor_eval WHERE code=l.code)"
+        ).fetchall()
+    if not rows:
+        st.info("因子库为空。运行 scripts/auto_evolve.py 生成因子。")
+        st.stop()
+    lib = pd.DataFrame(rows, columns=["code", "category", "source", "desc",
+                                      "is_icir", "oos_icir", "net_ir",
+                                      "stability", "selected"])
+
+    src = st.multiselect("来源筛选", ["auto_evolve", "worldquant_alpha101",
+                                       "qlib_alpha158", ""],
+                         default=[])
+    if src:
+        lib = lib[lib["source"].isin(src)]
+
+    fig = go.Figure()
+    fig.add_trace(go.Bar(
+        x=lib["code"], y=lib["oos_icir"].fillna(0),
+        marker_color=lib["net_ir"].fillna(0).map(
+            lambda v: "#ef4444" if v <= 0 else "#3b82f6"),
+        name="OOS ICIR"))
+    fig.update_layout(height=420, margin=dict(l=8, r=8, t=16, b=8),
+                      xaxis_tickangle=-45, showlegend=False)
+    st.plotly_chart(fig, use_container_width=True)
+
+    c1, c2, c3 = st.columns(3)
+    c1.metric("因子总数", len(lib))
+    c2.metric("社区来源", int((lib["source"] != "auto_evolve").sum()))
+    c3.metric("净成本IR>0 可交易", int((lib["net_ir"] > 0).sum()))
+    st.dataframe(lib.round(3), use_container_width=True, hide_index=True)
+
+elif page == "进化历史":
+    st.header("进化历史 · 自动进化时间线")
+    st.caption("每次 auto_evolve 的晋升记录：新 OOS 走势、入选因子数、因子选择频率。")
+    with get_conn() as conn:
+        init_schema(conn)
+        rows = conn.execute(
+            "SELECT run_at, selected_json, old_oos, new_oos, promoted, notes "
+            "FROM evolution_log ORDER BY run_at"
+        ).fetchall()
+    if not rows:
+        st.info("还没有进化记录。运行 scripts/auto_evolve.py（非 dry_run）产生。")
+        st.stop()
+
+    ev = pd.DataFrame(rows, columns=["run_at", "selected_json", "old_oos",
+                                     "new_oos", "promoted", "notes"])
+    ev["n_selected"] = ev["selected_json"].apply(
+        lambda s: len(json.loads(s)) if s else 0)
+    ev["new_oos"] = ev["new_oos"].astype(float)
+
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(x=ev["run_at"], y=ev["new_oos"], mode="lines+markers",
+                             name="新 OOS ICIR", line=dict(color="#f59e0b")))
+    fig.update_layout(height=340, margin=dict(l=8, r=8, t=16, b=8),
+                      xaxis_title="运行时间", yaxis_title="晋升后 OOS ICIR")
+    st.plotly_chart(fig, use_container_width=True)
+
+    # 因子入选频率（跨运行）
+    from collections import Counter
+    cnt = Counter()
+    for s in ev["selected_json"]:
+        for f in json.loads(s or "[]"):
+            cnt[f] += 1
+    if cnt:
+        fc = pd.DataFrame(cnt.items(), columns=["factor", "times_selected"])
+        fc = fc.sort_values("times_selected", ascending=False)
+        st.subheader("因子入选频率（跨进化轮次）")
+        st.bar_chart(fc.set_index("factor")["times_selected"])
+
+    st.subheader("历次进化记录")
+    for _, r in ev.iterrows():
+        tag = "✅晋升" if r["promoted"] else "⛔未晋升"
+        with st.expander(f"{r['run_at']}  {tag}  OOS={r['new_oos']:.3f}  "
+                         f"入选{int(r['n_selected'])}只"):
+            st.write("入选因子:", ", ".join(json.loads(r["selected_json"] or "[]")))
+            if r["notes"]:
+                st.caption(r["notes"])
