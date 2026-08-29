@@ -293,34 +293,37 @@ elif page == "多因子策略":
 
     c1, c2 = st.columns(2)
     if c1.button("生成实时推荐", type="primary"):
-        with st.spinner("实时重算多因子打分(与每日推荐同一引擎)…"):
-            # P0-3：复用与每日推荐完全相同的单一打分路径(run_screen)，
-            # 不再走 M.live_recommend 的另一套 zscore/权重，杜绝两套结果互相矛盾。
-            from fwsp import screener as SC
-            recs = SC.run_screen(top_n=FILTERS["top_n"], persist=False)
-        if not recs:
-            st.error("无可用推荐（无活跃因子或市场数据不足）")
-        else:
-            st.success(f"实时 Top {len(recs)} 候选（与每日推荐同引擎）")
-            rows = [{"排名": i + 1, "代码": r["code"],
-                     "综合分": round(r["score"], 2),
-                     "因子贡献": ", ".join(r["reasons"])}
-                    for i, r in enumerate(recs)]
-            st.dataframe(rows, use_container_width=True, hide_index=True)
-            st.caption("因子贡献 = 各因子 z 分 × |净IR| 权重，"
-                       "与每日推荐一致。")
+        try:
+            with st.spinner("实时重算多因子打分(与每日推荐同一引擎)…"):
+                # P0-3：复用与每日推荐完全相同的单一打分路径(run_screen)，
+                # 不再走 M.live_recommend 的另一套 zscore/权重，杜绝两套结果互相矛盾。
+                from fwsp import screener as SC
+                recs = SC.run_screen(top_n=FILTERS["top_n"], persist=False)
+            if not recs:
+                st.error("无可用推荐（无活跃因子或市场数据不足）")
+            else:
+                st.success(f"实时 Top {len(recs)} 候选（与每日推荐同引擎）")
+                rows = [{"排名": i + 1, "代码": r["code"],
+                         "综合分": round(r["score"], 2),
+                         "因子贡献": ", ".join(r["reasons"])}
+                        for i, r in enumerate(recs)]
+                st.dataframe(rows, use_container_width=True, hide_index=True)
+                st.caption("因子贡献 = 各因子 z 分 × |净IR| 权重，"
+                           "与每日推荐一致。")
 
-            # 组合层展示（模拟，非实盘）：按综合分绝对值归一化权重
-            with card_container("模拟组合配置（研究用，非实盘）"):
-                tot = sum(abs(r["score"]) for r in recs) or 1
-                pf = [{"代码": r["code"], "综合分": round(r["score"], 2),
-                       "权重%": round(abs(r["score"]) / tot * 100, 1)}
-                      for r in recs]
-                pfd = pd.DataFrame(pf)
-                st.dataframe(pfd, use_container_width=True, hide_index=True)
-                _echarts(factor_bar(pfd, "代码", "权重%"), height=320)
-                st.caption("权重 = |综合分| / Σ|综合分|，仅用于观察因子驱动的"
-                           "候选分布，不构成持仓建议。")
+                # 组合层展示（模拟，非实盘）：按综合分绝对值归一化权重
+                with card_container("模拟组合配置（研究用，非实盘）"):
+                    tot = sum(abs(r["score"]) for r in recs) or 1
+                    pf = [{"代码": r["code"], "综合分": round(r["score"], 2),
+                           "权重%": round(abs(r["score"]) / tot * 100, 1)}
+                          for r in recs]
+                    pfd = pd.DataFrame(pf)
+                    st.dataframe(pfd, use_container_width=True, hide_index=True)
+                    _echarts(factor_bar(pfd, "代码", "权重%"), height=320)
+                    st.caption("权重 = |综合分| / Σ|综合分|，仅用于观察因子驱动的"
+                               "候选分布，不构成持仓建议。")
+        except Exception as e:
+            st.error(f"实时推荐计算失败：{e}")
 
     if c2.button("重新挖掘因子(约5分钟)"):
         with st.spinner("贪心挖掘中，请勿关闭…"):
@@ -345,41 +348,44 @@ elif page == "多因子策略":
         if not selected:
             st.warning("请先挖掘因子（上方按钮）。")
         else:
-            with st.spinner("构建因子面板(首次约2分钟) + 回测…"):
-                z, ic, close, opn, low, highs, quality = build_multifactor()
+            try:
+                with st.spinner("构建因子面板(首次约2分钟) + 回测…"):
+                    z, ic, close, opn, low, highs, quality = build_multifactor()
+                    with get_conn() as conn:
+                        qp = F.quality_panel(conn, close.index)
+                    res = M.walk_forward_backtest(
+                        z, ic, close, opn, low, qp, highs=highs,
+                        start="2024-06-01",
+                        top_n=int(tpn), horizon=int(hzn), stop_pct=float(stp),
+                        rebal=('M' if freq == '月' else 'W'),
+                        trail=(float(trl) if trl > 0 else None),
+                        profit_pct=(float(tpp) if tpp > 0 else None),
+                        selected=selected)
+                metric_row([
+                    {"label": "总收益", "value": f"{res['total_return']*100:+.1f}%"},
+                    {"label": "年化",   "value": f"{res['cagr']*100:+.1f}%"},
+                    {"label": "最大回撤", "value": f"{res['max_drawdown']*100:.1f}%"},
+                    {"label": "胜率",   "value": f"{res['win_rate']*100:.0f}%",
+                     "delta": f"{int(res['n_trades'])}笔"},
+                    {"label": "夏普",   "value": f"{res['sharpe']:.2f}"},
+                ])
+                eq = res["equity"]
+                eq_n = eq / eq.iloc[0]
                 with get_conn() as conn:
-                    qp = F.quality_panel(conn, close.index)
-                res = M.walk_forward_backtest(
-                    z, ic, close, opn, low, qp, highs=highs,
-                    start="2024-06-01",
-                    top_n=int(tpn), horizon=int(hzn), stop_pct=float(stp),
-                    rebal=('M' if freq == '月' else 'W'),
-                    trail=(float(trl) if trl > 0 else None),
-                    profit_pct=(float(tpp) if tpp > 0 else None),
-                    selected=selected)
-            metric_row([
-                {"label": "总收益", "value": f"{res['total_return']*100:+.1f}%"},
-                {"label": "年化",   "value": f"{res['cagr']*100:+.1f}%"},
-                {"label": "最大回撤", "value": f"{res['max_drawdown']*100:.1f}%"},
-                {"label": "胜率",   "value": f"{res['win_rate']*100:.0f}%",
-                 "delta": f"{int(res['n_trades'])}笔"},
-                {"label": "夏普",   "value": f"{res['sharpe']:.2f}"},
-            ])
-            eq = res["equity"]
-            eq_n = eq / eq.iloc[0]
-            with get_conn() as conn:
-                b = conn.execute(
-                    "SELECT date,close FROM index_daily WHERE code='sh.000300' "
-                    "AND date BETWEEN ? AND ? ORDER BY date",
-                    (str(eq.index[0].date()), str(eq.index[-1].date()))
-                ).fetchall()
-            bdf = pd.DataFrame(b, columns=["date", "close"])
-            bench_s = None
-            if len(bdf) > 1:
-                bench_s = bdf.set_index(pd.to_datetime(bdf["date"]))["close"]
-                bench_s = bench_s / bench_s.iloc[0]
-            with card_container("净值曲线"):
-                _echarts(equity_curve(eq_n, bench_s), height=400)
+                    b = conn.execute(
+                        "SELECT date,close FROM index_daily WHERE code='sh.000300' "
+                        "AND date BETWEEN ? AND ? ORDER BY date",
+                        (str(eq.index[0].date()), str(eq.index[-1].date()))
+                    ).fetchall()
+                bdf = pd.DataFrame(b, columns=["date", "close"])
+                bench_s = None
+                if len(bdf) > 1:
+                    bench_s = bdf.set_index(pd.to_datetime(bdf["date"]))["close"]
+                    bench_s = bench_s / bench_s.iloc[0]
+                with card_container("净值曲线"):
+                    _echarts(equity_curve(eq_n, bench_s), height=400)
+            except Exception as e:
+                st.error(f"多因子回测失败：{e}")
 
 elif page == "推荐追踪":
     st.header("历史推荐表现追踪")

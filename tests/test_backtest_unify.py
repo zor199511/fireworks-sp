@@ -75,6 +75,15 @@ def test_decide_exit_expire():
     assert reason == "expire" and px == 100
 
 
+def test_decide_exit_expires_at_horizon_minus_one():
+    # 与 forward_returns 的 open[t+1]→open[t+horizon] 持仓期严格对齐（消 off-by-one）
+    pos = _pos()
+    px, reason = execution.decide_exit(pos, 100, 99, 105, -8, 10, None, 9, 10)
+    assert reason == "expire" and px == 100
+    px2, reason2 = execution.decide_exit(pos, 100, 99, 105, -8, 10, None, 8, 10)
+    assert reason2 is None  # 未到 horizon-1 日，无止损/止盈时不离场
+
+
 def test_position_return_applies_both_costs():
     r = execution.position_return(110, 100)
     exp = (110 * (1 - costs.COST_SELL)) / (100 * (1 + costs.COST_BUY)) - 1

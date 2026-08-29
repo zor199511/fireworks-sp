@@ -54,11 +54,14 @@ def decide_exit(pos: dict, px_open, lo, hi, stop_pct: float,
     - 止损：开盘破位→以开盘价止损；盘中触及→以 min(开盘, 止损价) 止损。
     - 跟踪止盈：盘中低点触及峰值回撤阈值→离场。
     - 目标止盈：盘中高点触及目标价→以目标价离场（用日内 high，更贴近实盘）。
-    - 到期：持有达 horizon→开盘离场。
-    - 被困兜底：持有达 stuck_after（可选）→以买入价强平。
+    - 到期：持有达 horizon-1 日→开盘离场（与 forward_returns 的
+      open[t+1]→open[t+horizon] 持仓期严格对齐，消除 off-by-one）。
+    - 被困兜底：仅当开盘价缺失（数据缺口）且持有达 stuck_after 时，
+      以买入价强平——正常行情下到期先触发，此分支为数据缺失安全网。
     """
     stop_px = pos["buy_px"] * (1 + stop_pct / 100)
     peak = pos.get("peak", pos["buy_px"])
+    expire_h = horizon - 1 if horizon > 1 else horizon
     if held >= 1 and pd.notna(px_open):
         if px_open <= stop_px:
             return px_open, "stop"
@@ -71,7 +74,7 @@ def decide_exit(pos: dict, px_open, lo, hi, stop_pct: float,
             tp = pos["buy_px"] * (1 + profit_pct / 100)
             if hi >= tp:
                 return tp, "tp"
-        if held >= horizon:
+        if held >= expire_h:
             return px_open, "expire"
     elif stuck_after and held >= stuck_after:
         return pos["buy_px"], "stuck"

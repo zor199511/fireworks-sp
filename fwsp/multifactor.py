@@ -193,7 +193,7 @@ def walk_forward_backtest(zscores, ics, close, opn, low, quality, highs=None,
     return {"total_return": ret_total, "cagr": cagr, "max_drawdown": dd,
             "sharpe": sharpe, "n_trades": len(trades),
             "win_rate": len(wins) / len(trades) if trades else 0,
-            "equity": eq_series}
+            "trades": trades, "equity": eq_series}
 
 
 def mine_factors(factors, close, opn, low, fwd, quality, qpanel=None, highs=None,

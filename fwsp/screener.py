@@ -203,17 +203,3 @@ def _persist(conn, top: list[dict]):
 
 
 RECO_TABLE = "recommendations"
-
-
-def ensure_reco_schema():
-    with get_conn() as conn:
-        init_schema(conn)
-        conn.execute("""
-        CREATE TABLE IF NOT EXISTS recommendations (
-            run_date TEXT, rank INTEGER, code TEXT,
-            name TEXT, industry TEXT,
-            score REAL, price REAL,
-            reasons TEXT, metrics TEXT,
-            ret_5d REAL, ret_10d REAL, ret_20d REAL, ret_60d REAL,
-            PRIMARY KEY (run_date, code)
-        )""")

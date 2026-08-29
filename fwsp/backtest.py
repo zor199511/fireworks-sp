@@ -167,6 +167,8 @@ def run_backtest(start="2024-01-01", end=None, top_n=10, hold_days=5,
             sell_px, reason = decide_exit(
                 pos, px_open, lo, hi, stop_pct, profit_pct, None,
                 held, hold_days, stuck_after=hold_days * 2)
+            # 注：stuck_after 仅作数据缺口(开盘价缺失)安全网；正常行情下
+            # 持有达 hold_days-1 日已由 expire 离场，见 execution.decide_exit
             if sell_px is not None:
                 cash += sell_value(pos["shares"], sell_px)
                 trades.append({"code": code, "entry_date": str(pos["entry_d"]),
