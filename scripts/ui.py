@@ -89,6 +89,21 @@ def badge(text: str, variant: str = "info") -> str:
     return f'<span class="badge badge-{variant}">{text}</span>'
 
 
+import re as _re
+
+_BADGE_SIGN_RE = _re.compile(r"([+-]\d+\.?\d*)\s*\)?\s*$")
+
+
+def reason_badge(text: str) -> str:
+    """推荐理由 badge：带符号数值(如 fid(+1.2) / name-1.23)按正负着色，
+    正=利好(success) 负=利空(danger)，其余中性(info)。"""
+    m = _BADGE_SIGN_RE.search(text)
+    if m:
+        variant = "success" if m.group(1).startswith("+") else "danger"
+        return badge(text, variant)
+    return badge(text, "info")
+
+
 def alert_banner(text: str, variant: str = "info") -> None:
     """Render a colored alert banner."""
     st.markdown(f'<div class="alert-banner {variant}">{text}</div>',

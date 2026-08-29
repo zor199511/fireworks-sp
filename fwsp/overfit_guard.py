@@ -1,10 +1,13 @@
 """过拟合防护：OOS/IS 比率、告警、稳定性、健康汇总。"""
 from __future__ import annotations
 
+import json
 import math
 
 import numpy as np
 import pandas as pd
+
+from .db import get_meta
 
 
 def oos_is_ratio(is_icir: float | None, oos_icir: float | None) -> float:
@@ -58,3 +61,40 @@ def factor_health(rows: list[dict]) -> list[str]:
                 and stab < 0:
             warnings.append(f"{code}: 稳定性指标为负({stab})")
     return warnings
+
+
+def active_guard_status(conn) -> dict:
+    """读取 meta[active_factors]，汇总当前活跃因子的护栏状态。
+
+    返回 {"count","alert_bad","alert_warn","messages"}。
+    alert_bad: 净成本 IR<=0（不可交易）；alert_warn: 稳定性(worst rolling ICIR)<0。
+    """
+    raw = get_meta(conn, "active_factors")
+    if not raw:
+        return {"count": 0, "alert_bad": 0, "alert_warn": 0, "messages": []}
+    try:
+        ids = json.loads(raw)
+    except (TypeError, ValueError):
+        return {"count": 0, "alert_bad": 0, "alert_warn": 0, "messages": []}
+    if not ids:
+        return {"count": 0, "alert_bad": 0, "alert_warn": 0, "messages": []}
+    ph = ",".join("?" * len(ids))
+    rows = conn.execute(
+        "SELECT code, stability, net_ir FROM factor_eval "
+        f"WHERE (code,run_at) IN (SELECT code, MAX(run_at) FROM factor_eval "
+        f"WHERE code IN ({ph}) GROUP BY code)", ids).fetchall()
+    bad = 0
+    warn = 0
+    messages: list[str] = []
+    for code, stab, nir in rows:
+        if nir is not None and not (isinstance(nir, float) and math.isnan(nir)) \
+                and nir <= 0:
+            bad += 1
+            messages.append(f"{code}: 净成本 IR≤0 不可交易")
+            continue
+        if stab is not None and not (isinstance(stab, float) and math.isnan(stab)) \
+                and stab < 0:
+            warn += 1
+            messages.append(f"{code}: 稳定性转负({stab:.2f})")
+    return {"count": len(ids), "alert_bad": bad, "alert_warn": warn,
+            "messages": messages}

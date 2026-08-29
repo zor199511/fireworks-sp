@@ -13,14 +13,15 @@ st.set_page_config(page_title="fireworks-sp", page_icon="🎆",
                    layout="wide")
 
 from ui import (inject_css, sidebar_nav, section_title, metric_row,  # noqa: E402
-                card_container, badge, alert_banner, candle_chart,
-                ratio_bar, pareto_scatter, timeline, equity_curve,
-                factor_bar, freq_bar)
+                card_container, badge, alert_banner, reason_badge,
+                candle_chart, ratio_bar, pareto_scatter, timeline,
+                equity_curve, factor_bar, freq_bar)
 inject_css()
 
 from fwsp.backtest import run_backtest  # noqa: E402
 from fwsp.config import FILTERS  # noqa: E402
 from fwsp.db import get_conn, init_schema  # noqa: E402
+from fwsp.overfit_guard import active_guard_status  # noqa: E402
 from fwsp.tracker import summary_stats, update_tracking  # noqa: E402
 from fwsp import factors as F, multifactor as M  # noqa: E402
 
@@ -106,6 +107,12 @@ def load_multifactor_meta():
         return M.load_selected(conn)
 
 
+@st.cache_data(ttl=300)
+def active_guard():
+    with get_conn() as conn:
+        return active_guard_status(conn)
+
+
 # --------------------------------------------------------------- sidebar
 
 meta = load_meta()
@@ -128,6 +135,27 @@ if page == "今日推荐":
         st.info("还没有推荐记录。先运行 scripts/recommend.py")
         st.stop()
 
+    # 护栏状态横幅：活跃因子若不可交易/失效，提示今日信号可信度下降
+    g = active_guard()
+    if g["alert_bad"]:
+        alert_banner(f"⛔ {g['alert_bad']} 个活跃因子净成本 IR≤0（不可交易），"
+                     f"今日信号部分依赖失效因子", "danger")
+    elif g["alert_warn"]:
+        alert_banner(f"⚠ {g['alert_warn']} 个活跃因子稳定性转负，"
+                     f"近期因子可能衰减", "warning")
+
+    # 本地搜索/筛选
+    q = st.text_input("搜索 (代码 / 名称 / 行业 / 理由)",
+                      "").strip().lower()
+    if q:
+        recos = [r for r in recos
+                 if q in r["code"].lower() or q in r["name"].lower()
+                 or q in (r["industry"] or "").lower()
+                 or any(q in x.lower() for x in r["reasons"])]
+    if not recos:
+        st.info("无匹配结果。")
+        st.stop()
+
     avg_score = sum(r["score"] for r in recos) / len(recos)
     metric_row([
         {"label": "平均评分", "value": f"{avg_score:.1f}"},
@@ -141,8 +169,8 @@ if page == "今日推荐":
                 f"{r['industry'] or '—'}  ·  评分 {r['score']:.0f}  ·  "
                 f"¥{r['price']:.2f}")
         with card_container(head):
-            # reasons as badges
-            reasons_html = " ".join(badge(txt, "info") for txt in r["reasons"])
+            # reasons 按正负着色：利好(绿)/利空(红)/中性(蓝)
+            reasons_html = " ".join(reason_badge(txt) for txt in r["reasons"])
             if reasons_html:
                 st.markdown(reasons_html, unsafe_allow_html=True)
             tail = (f"PE {r['metrics'].get('pe_dyn') or '—'} | "
@@ -227,6 +255,13 @@ elif page == "策略回测":
 elif page == "多因子策略":
     st.header("多因子策略（walk-forward 自动挖掘）")
     selected = load_multifactor_meta()
+    g = active_guard()
+    if g["alert_bad"]:
+        alert_banner(f"⛔ {g['alert_bad']} 个活跃因子净成本 IR≤0，"
+                     f"实时推荐可能含失效因子", "danger")
+    elif g["alert_warn"]:
+        alert_banner(f"⚠ {g['alert_warn']} 个活跃因子稳定性转负，"
+                     f"建议触发重新进化", "warning")
     if not selected:
         st.warning("尚未挖掘因子。点下方「重新挖掘因子」生成（约 5 分钟）。")
     else:
@@ -272,6 +307,18 @@ elif page == "多因子策略":
             st.dataframe(rows, use_container_width=True, hide_index=True)
             st.caption("因子贡献 = 各因子 z 分 × 训练窗 IC 权重，"
                        "仅供研究。")
+
+            # 组合层展示（模拟，非实盘）：按综合分绝对值归一化权重
+            with card_container("模拟组合配置（研究用，非实盘）"):
+                tot = sum(abs(r["score"]) for r in recs) or 1
+                pf = [{"代码": r["code"], "综合分": round(r["score"], 2),
+                       "权重%": round(abs(r["score"]) / tot * 100, 1)}
+                      for r in recs]
+                pfd = pd.DataFrame(pf)
+                st.dataframe(pfd, use_container_width=True, hide_index=True)
+                _echarts(factor_bar(pfd, "代码", "权重%"), height=320)
+                st.caption("权重 = |综合分| / Σ|综合分|，仅用于观察因子驱动的"
+                           "候选分布，不构成持仓建议。")
 
     if c2.button("重新挖掘因子(约5分钟)"):
         with st.spinner("贪心挖掘中，请勿关闭…"):
@@ -435,10 +482,19 @@ elif page == "因子库":
                                       "stability", "selected"])
 
     src = st.multiselect("来源筛选", ["auto_evolve", "worldquant_alpha101",
-                                       "qlib_alpha158", ""],
-                         default=[])
+                                        "qlib_alpha158", ""],
+                          default=[])
     if src:
         lib = lib[lib["source"].isin(src)]
+
+    # 本地搜索/筛选
+    fq = st.text_input("搜索因子 (代码 / 类别 / 描述 / 来源)", "").strip().lower()
+    if fq:
+        lib = lib[lib.apply(
+            lambda r: fq in str(r["code"]).lower()
+            or fq in str(r["category"]).lower()
+            or fq in str(r["desc"]).lower()
+            or fq in str(r["source"]).lower(), axis=1)]
 
     with card_container("OOS ICIR（红=不可交易）"):
         _echarts(factor_bar(lib, "code", "oos_icir", color_col="net_ir"), height=420)
@@ -448,12 +504,23 @@ elif page == "因子库":
         {"label": "可交易",   "value": str(int((lib["net_ir"] > 0).sum())),
          "delta_type": "success"},
     ])
-    # source badges in table
+    # source badges + 活跃/衰减状态
     lib_display = lib.copy()
+
+    def _status_badge(row):
+        if not row["selected"]:
+            return badge("候选", "muted")
+        decayed = ((row["net_ir"] is not None and not pd.isna(row["net_ir"])
+                    and row["net_ir"] <= 0)
+                   or (row["stability"] is not None and not pd.isna(row["stability"])
+                       and row["stability"] < 0))
+        return badge("⚠衰减", "danger") if decayed else badge("✓活跃", "success")
+
     lib_display["source_badge"] = lib_display["source"].apply(
         lambda s: badge("auto", "info") if s == "auto_evolve"
         else badge(s.split("_")[0] if s else "—", "muted"))
-    show_cols = ["code", "category", "source_badge", "desc",
+    lib_display["status_badge"] = lib_display.apply(_status_badge, axis=1)
+    show_cols = ["code", "category", "source_badge", "status_badge", "desc",
                  "is_icir", "oos_icir", "net_ir", "stability", "selected"]
     with card_container("因子明细"):
         st.dataframe(lib_display[show_cols].round(3), use_container_width=True,
