@@ -52,11 +52,17 @@ def test_forward_returns_not_close_to_close():
 def test_costs_single_source():
     assert abs(costs.COST_BUY - (0.00025 + 0.001)) < 1e-12
     assert abs(costs.COST_SELL - (0.00025 + 0.0005 + 0.001)) < 1e-12
-    from fwsp import backtest, multifactor
-    assert backtest.COST_BUY is costs.COST_BUY
-    assert backtest.COST_SELL is costs.COST_SELL
+    from fwsp import factor_mining, multifactor
+    from fwsp import backtest
+    # backtest 与 multifactor 的买卖成本统一走 execution 层（不再各自 import costs）
     assert multifactor.COST_BUY is costs.COST_BUY
-    assert multifactor.COST_SELL is costs.COST_SELL
+    # 晋升路径 long_short_backtest 的单边成本也单一来源自 costs
+    assert factor_mining.COST_BUY is costs.COST_BUY
+    assert factor_mining.COST_SELL is costs.COST_SELL
+    # 统一执行层
+    from fwsp import execution
+    assert execution.COST_BUY is costs.COST_BUY
+    assert execution.COST_SELL is costs.COST_SELL
 
 
 def test_walk_forward_backtest_accepts_profit_pct():
@@ -64,11 +70,12 @@ def test_walk_forward_backtest_accepts_profit_pct():
     panels = _panels(n=200)
     z = {f"f{i}": pd.DataFrame(np.random.default_rng(i).standard_normal(panels["close"].shape),
                               index=panels["close"].index, columns=panels["close"].columns)
-          for i in range(3)}
+         for i in range(3)}
     ics = {k: pd.Series(np.random.default_rng(1).standard_normal(len(panels["close"].index)),
                        index=panels["close"].index) for k in z}
     for pp in (None, 8.0):
         r = M.walk_forward_backtest(z, ics, panels["close"], panels["open"],
-                                   panels["low"], set(), start="2024-03-01",
-                                   top_n=3, horizon=10, profit_pct=pp)
+                                    panels["low"], set(), highs=panels["high"],
+                                    start="2024-03-01",
+                                    top_n=3, horizon=10, profit_pct=pp)
         assert "total_return" in r and np.isfinite(r["total_return"])

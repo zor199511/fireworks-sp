@@ -4,7 +4,9 @@ from datetime import date
 import numpy as np
 import pandas as pd
 
-from .costs import COST_BUY, COST_SELL
+from .costs import COST_BUY
+from .execution import (compute_shares, decide_exit, mark_equity,
+                        position_return, sell_value)
 
 log = logging.getLogger("fwsp.multifactor")
 
@@ -76,7 +78,7 @@ def _train_weights(ics, quality, horizon, train_dates):
     return w
 
 
-def walk_forward_backtest(zscores, ics, close, opn, low, quality,
+def walk_forward_backtest(zscores, ics, close, opn, low, quality, highs=None,
                           start="2024-06-01", end=None, top_n=10,
                           horizon=10, stop_pct=-8.0, train_days=252,
                           capital=1_000_000.0, selected=None,
@@ -96,10 +98,7 @@ def walk_forward_backtest(zscores, ics, close, opn, low, quality,
 
     for i in range(len(cal)):
         d = cal[i]
-        eq = cash
-        for code, pos in positions.items():
-            px = close.at[d, code] if code in close.columns else np.nan
-            eq += pos["shares"] * (px if pd.notna(px) else pos["buy_px"])
+        eq = mark_equity(positions, close, d, cash)
         equity_curve.append((d, eq))
 
         for code in list(positions):
@@ -107,29 +106,15 @@ def walk_forward_backtest(zscores, ics, close, opn, low, quality,
             held = i - pos["entry_i"]
             px_open = opn.at[d, code] if code in opn.columns else np.nan
             lo = low.at[d, code] if code in low.columns else np.nan
-            stop_px = pos["buy_px"] * (1 + stop_pct / 100)
-            peak_v = pos.get("peak", pos["buy_px"])
-            sell_px = None
-            if held >= 1 and pd.notna(px_open) and pd.notna(lo):
-                if lo <= stop_px:
-                    sell_px = min(px_open, stop_px)
-                    reason = "stop"
-                elif trail is not None and trail > 0 and \
-                        lo <= peak_v * (1 - trail / 100):
-                    sell_px = min(px_open, peak_v * (1 - trail / 100))
-                    reason = "trail"
-                elif profit_pct is not None and profit_pct > 0 and \
-                        pd.notna(px) and px >= pos["buy_px"] * (1 + profit_pct / 100):
-                    sell_px = px_open
-                    reason = "tp"
-                elif held >= horizon:
-                    sell_px = px_open
-                    reason = "expire"
-            if sell_px:
-                cash += pos["shares"] * sell_px * (1 - COST_SELL)
+            hi = (highs.at[d, code] if (highs is not None
+                                        and code in highs.columns) else np.nan)
+            sell_px, reason = decide_exit(
+                pos, px_open, lo, hi, stop_pct, profit_pct, trail, held,
+                horizon)
+            if sell_px is not None:
+                cash += sell_value(pos["shares"], sell_px)
                 trades.append({"code": code,
-                               "ret": (sell_px * (1 - COST_SELL)) /
-                                      (pos["buy_px"] * (1 + COST_BUY)) - 1,
+                               "ret": position_return(sell_px, pos["buy_px"]),
                                "reason": reason})
                 del positions[code]
 
@@ -179,15 +164,10 @@ def walk_forward_backtest(zscores, ics, close, opn, low, quality,
                 if n_slots <= 0 or code in positions:
                     continue
                 px = opn.at[d, code]
-                if pd.isna(px) or px <= 0:
-                    continue
-                shares = int(budget / (px * (1 + COST_BUY)) / 100) * 100
+                shares = compute_shares(budget, px, cash)
                 if shares <= 0:
                     continue
-                cost = shares * px * (1 + COST_BUY)
-                if cost > cash:
-                    continue
-                cash -= cost
+                cash -= shares * px * (1 + COST_BUY)
                 positions[code] = {"shares": shares, "buy_px": px,
                                    "entry_i": i, "peak": px}
                 n_slots -= 1
@@ -196,10 +176,9 @@ def walk_forward_backtest(zscores, ics, close, opn, low, quality,
     for code, pos in list(positions.items()):
         px = close.at[last_d, code]
         if pd.notna(px):
-            cash += pos["shares"] * px * (1 - COST_SELL)
+            cash += sell_value(pos["shares"], px)
             trades.append({"code": code,
-                           "ret": (px * (1 - COST_SELL)) /
-                                  (pos["buy_px"] * (1 + COST_BUY)) - 1,
+                           "ret": position_return(px, pos["buy_px"]),
                            "reason": "final"})
         del positions[code]
 
@@ -217,11 +196,12 @@ def walk_forward_backtest(zscores, ics, close, opn, low, quality,
             "equity": eq_series}
 
 
-def mine_factors(factors, close, opn, low, fwd, quality, qpanel=None,
+def mine_factors(factors, close, opn, low, fwd, quality, qpanel=None, highs=None,
                  horizon=10, start="2024-06-01", top_n=10, max_factors=12):
     """前向贪心因子选择：每步加入使 walk-forward OOS 夏普最高的因子。
 
     quality: 静态质量集（用于 IC 计算）；qpanel: 时间变化质量面板（用于回测）。
+    highs/low: 日内高低面板（统一执行层用于止盈/止损）。
     返回 (selected_list, report_df)。
     """
     z, ic = precompute(factors, fwd, quality, horizon)
@@ -236,7 +216,8 @@ def mine_factors(factors, close, opn, low, fwd, quality, qpanel=None,
             if name in selected:
                 continue
             r = walk_forward_backtest(z, ic, close, opn, low, backtest_quality,
-                                      start=start, top_n=top_n, horizon=horizon,
+                                      highs=highs, start=start, top_n=top_n,
+                                      horizon=horizon,
                                       selected=selected + [name])
             if r["sharpe"] > best_sharpe:
                 best_sharpe, best_name = r["sharpe"], name

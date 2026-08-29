@@ -98,7 +98,7 @@ def build_multifactor():
         fwd = F.forward_returns(blob)
         quality = blob["quality"]
     z, ic = M.precompute(blob["factors"], fwd, quality, 10)
-    return z, ic, blob["close"], blob["open"], blob["low"], quality
+    return z, ic, blob["close"], blob["open"], blob["low"], blob["high"], quality
 
 
 @st.cache_data(ttl=600)
@@ -346,11 +346,12 @@ elif page == "多因子策略":
             st.warning("请先挖掘因子（上方按钮）。")
         else:
             with st.spinner("构建因子面板(首次约2分钟) + 回测…"):
-                z, ic, close, opn, low, quality = build_multifactor()
+                z, ic, close, opn, low, highs, quality = build_multifactor()
                 with get_conn() as conn:
                     qp = F.quality_panel(conn, close.index)
                 res = M.walk_forward_backtest(
-                    z, ic, close, opn, low, qp, start="2024-06-01",
+                    z, ic, close, opn, low, qp, highs=highs,
+                    start="2024-06-01",
                     top_n=int(tpn), horizon=int(hzn), stop_pct=float(stp),
                     rebal=('M' if freq == '月' else 'W'),
                     trail=(float(trl) if trl > 0 else None),

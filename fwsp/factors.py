@@ -35,8 +35,8 @@ def build_factor_panel(conn):
                quality(set of kept codes, 常数)。
     """
     panels = load_panels(conn)
-    c, o, h, v, amt = (panels["close"], panels["open"], panels["high"],
-                       panels["volume"], panels["amount"])
+    c, o, h, l, v, amt = (panels["close"], panels["open"], panels["high"],
+                          panels["low"], panels["volume"], panels["amount"])
     ret = c.pct_change()
 
     f = {}
@@ -88,7 +88,7 @@ def build_factor_panel(conn):
 
     quality = quality_mask(conn)
 
-    return {"factors": f, "close": c, "open": o, "low": h,
+    return {"factors": f, "close": c, "open": o, "high": h, "low": l,
             "volume": v, "amount": amt, "quality": quality, "ret": ret}
 
 

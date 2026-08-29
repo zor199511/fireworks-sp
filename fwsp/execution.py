@@ -1,0 +1,77 @@
+"""统一的持仓执行层：成本、止盈、止损、滑点、仓位口径的唯一实现。
+
+`backtest.run_backtest`(技术策略) 与 `multifactor.walk_forward_backtest`(因子模型)
+都调用本模块，确保两套回测对「买卖成本 / 止损 / 止盈 / 滑点」的处理完全一致，
+不再各自实现导致口径漂移。
+"""
+import pandas as pd
+
+from .costs import COST_BUY, COST_SELL
+
+__all__ = [
+    "compute_shares", "position_return", "sell_value",
+    "decide_exit", "mark_equity",
+]
+
+
+def compute_shares(budget: float, px: float, cash: float) -> int:
+    """按预算与可用现金计算可买手数（100 股/手，含买入成本）。"""
+    if budget <= 0 or pd.isna(px) or px <= 0:
+        return 0
+    shares = int(budget / (px * (1 + COST_BUY)) / 100) * 100
+    if shares <= 0:
+        return 0
+    if shares * px * (1 + COST_BUY) > cash:
+        return 0
+    return shares
+
+
+def sell_value(shares: int, px: float) -> float:
+    """卖出到账金额（扣卖出成本）。"""
+    return shares * px * (1 - COST_SELL)
+
+
+def position_return(sell_px: float, buy_px: float) -> float:
+    """单笔持仓收益率（含买卖成本）。"""
+    return (sell_px * (1 - COST_SELL)) / (buy_px * (1 + COST_BUY)) - 1
+
+
+def mark_equity(positions: dict, closes: pd.DataFrame, d, cash: float) -> float:
+    """按当日收盘价对当前持仓做市值标记。"""
+    eq = cash
+    for code, pos in positions.items():
+        px = closes.at[d, code] if code in closes.columns else None
+        eq += pos["shares"] * (px if pd.notna(px) else pos["buy_px"])
+    return eq
+
+
+def decide_exit(pos: dict, px_open, lo, hi, stop_pct: float,
+                profit_pct, trail, held: int, horizon: int,
+                stuck_after: int | None = None):
+    """统一的当日离场决策。返回 (sell_px, reason)；不触发则 (None, None)。
+
+    - 止损：开盘破位→以开盘价止损；盘中触及→以 min(开盘, 止损价) 止损。
+    - 跟踪止盈：盘中低点触及峰值回撤阈值→离场。
+    - 目标止盈：盘中高点触及目标价→以目标价离场（用日内 high，更贴近实盘）。
+    - 到期：持有达 horizon→开盘离场。
+    - 被困兜底：持有达 stuck_after（可选）→以买入价强平。
+    """
+    stop_px = pos["buy_px"] * (1 + stop_pct / 100)
+    peak = pos.get("peak", pos["buy_px"])
+    if held >= 1 and pd.notna(px_open):
+        if px_open <= stop_px:
+            return px_open, "stop"
+        if pd.notna(lo) and lo <= stop_px:
+            return min(px_open, stop_px), "stop"
+        if trail and trail > 0 and pd.notna(lo) \
+                and lo <= peak * (1 - trail / 100):
+            return min(px_open, peak * (1 - trail / 100)), "trail"
+        if profit_pct and profit_pct > 0 and pd.notna(hi):
+            tp = pos["buy_px"] * (1 + profit_pct / 100)
+            if hi >= tp:
+                return tp, "tp"
+        if held >= horizon:
+            return px_open, "expire"
+    elif stuck_after and held >= stuck_after:
+        return pos["buy_px"], "stuck"
+    return None, None

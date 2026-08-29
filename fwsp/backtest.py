@@ -5,7 +5,9 @@ from datetime import date
 import numpy as np
 import pandas as pd
 
-from .costs import COST_BUY, COST_SELL
+from .costs import COST_BUY
+from .execution import (compute_shares, decide_exit, mark_equity,
+                        position_return, sell_value)
 from .db import get_conn
 
 log = logging.getLogger("fwsp.backtest")
@@ -151,59 +153,25 @@ def run_backtest(start="2024-01-01", end=None, top_n=10, hold_days=5,
     for i in range(len(cal)):
         d = cal[i]
 
-        # mark to market
-        eq = cash
-        for code, pos in positions.items():
-            px = closes.at[d, code] if code in closes.columns else None
-            if pd.notna(px):
-                eq += pos["shares"] * px
-            else:
-                eq += pos["shares"] * pos["buy_px"]
+        # 市值标记（统一执行层）
+        eq = mark_equity(positions, closes, d, cash)
         equity_curve.append((d, eq))
 
-        # exits
+        # 离场决策（统一执行层）
         for code in list(positions):
             pos = positions[code]
             held = i - pos["entry_i"]
             px_open = opens.at[d, code] if code in opens.columns else None
             lo = lows.at[d, code] if code in lows.columns else None
             hi = highs.at[d, code] if code in highs.columns else None
-            stop_px = pos["buy_px"] * (1 + stop_pct / 100)
-
-            sell_px = None
-            reason = None
-
-            if held >= 1 and pd.notna(px_open):
-                # 开盘跌破止损 → 直接止损
-                if px_open <= stop_px:
-                    sell_px = px_open
-                    reason = "stop"
-                # 盘中触及止盈 → 以目标价卖出
-                elif profit_pct > 0 and pd.notna(hi):
-                    profit_px = pos["buy_px"] * (1 + profit_pct / 100)
-                    if hi >= profit_px:
-                        sell_px = profit_px
-                        reason = "take_profit"
-                # 盘中触及止损（未开盘破位）→ 以止损价卖出
-                elif pd.notna(lo) and lo <= stop_px:
-                    sell_px = min(px_open, stop_px)
-                    reason = "stop"
-                # 持有到期 → 开盘卖出
-                elif held >= hold_days:
-                    sell_px = px_open
-                    reason = "expire"
-            # 被困：持有 2 倍天数按买入价强制平仓
-            elif held >= hold_days * 2:
-                sell_px = pos["buy_px"]
-                reason = "stuck"
-
-            if sell_px:
-                proceeds = pos["shares"] * sell_px * (1 - COST_SELL)
-                cash += proceeds
-                ret = (sell_px * (1 - COST_SELL)) / (
-                    pos["buy_px"] * (1 + COST_BUY)) - 1
+            sell_px, reason = decide_exit(
+                pos, px_open, lo, hi, stop_pct, profit_pct, None,
+                held, hold_days, stuck_after=hold_days * 2)
+            if sell_px is not None:
+                cash += sell_value(pos["shares"], sell_px)
                 trades.append({"code": code, "entry_date": str(pos["entry_d"]),
-                               "exit_date": str(d), "ret": ret,
+                               "exit_date": str(d),
+                               "ret": position_return(sell_px, pos["buy_px"]),
                                "reason": reason})
                 del positions[code]
 
@@ -218,15 +186,10 @@ def run_backtest(start="2024-01-01", end=None, top_n=10, hold_days=5,
                 if n_slots <= 0 or code in positions:
                     continue
                 px = opens.at[d, code]
-                if pd.isna(px) or px <= 0:
-                    continue
-                shares = int(budget / (px * (1 + COST_BUY)) / 100) * 100
+                shares = compute_shares(budget, px, cash)
                 if shares <= 0:
                     continue
-                cost = shares * px * (1 + COST_BUY)
-                if cost > cash:
-                    continue
-                cash -= cost
+                cash -= shares * px * (1 + COST_BUY)
                 positions[code] = {"shares": shares, "buy_px": px,
                                    "entry_i": i, "entry_d": d}
                 n_slots -= 1
@@ -236,11 +199,10 @@ def run_backtest(start="2024-01-01", end=None, top_n=10, hold_days=5,
     for code, pos in list(positions.items()):
         px = closes.at[last_d, code]
         if pd.notna(px):
-            cash += pos["shares"] * px * (1 - COST_SELL)
+            cash += sell_value(pos["shares"], px)
             trades.append({"code": code, "entry_date": str(pos["entry_d"]),
                            "exit_date": str(last_d),
-                           "ret": (px * (1 - COST_SELL)) /
-                                  (pos["buy_px"] * (1 + COST_BUY)) - 1,
+                           "ret": position_return(px, pos["buy_px"]),
                            "reason": "final"})
         del positions[code]
 

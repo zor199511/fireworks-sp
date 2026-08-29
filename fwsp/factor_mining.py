@@ -10,6 +10,7 @@ import json
 import numpy as np
 import pandas as pd
 
+from .costs import COST_BUY, COST_SELL
 from .factor_factory import compute_factor
 from .overfit_guard import oos_is_ratio
 
@@ -193,8 +194,8 @@ def factor_turnover(factor: pd.DataFrame) -> dict:
 
 
 def long_short_backtest(factor: pd.DataFrame, fwd: pd.DataFrame,
-                        cost_buy: float = 0.00125,
-                        cost_sell: float = 0.00175,
+                        cost_buy: float = COST_BUY,
+                        cost_sell: float = COST_SELL,
                         top_frac: float = 0.1) -> dict:
     """成本敏感的多空组合：每日按因子截面排名多前 top_frac、空后 top_frac，
     净双边交易成本。返回净信息比率(net_ir)作为「可交易性」真实量度——

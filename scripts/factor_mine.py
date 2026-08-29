@@ -38,8 +38,8 @@ def main():
     t0 = time.time()
     selected, report = M.mine_factors(
         blob["factors"], blob["close"], blob["open"], blob["low"], fwd,
-        quality, qpanel=qpanel, horizon=args.horizon, start=args.is_start,
-        top_n=args.top_n, max_factors=args.max_factors)
+        quality, qpanel=qpanel, highs=blob["high"], horizon=args.horizon,
+        start=args.is_start, top_n=args.top_n, max_factors=args.max_factors)
     print(f"[mine] 选中 {len(selected)} 因子, {time.time()-t0:.1f}s")
     print("  逐步加入:", ", ".join(report["added"].tolist()))
     print(report.to_string(index=False))
@@ -51,12 +51,12 @@ def main():
 
     print("\n=== 对比（IS 窗口 %s→%s）===" % (args.is_start, args.holdout))
     r_is = M.walk_forward_backtest(
-        z, ic, blob["close"], blob["open"], blob["low"], qpanel,
+        z, ic, blob["close"], blob["open"], blob["low"], qpanel, highs=blob["high"],
         start=args.is_start, end=args.holdout, top_n=args.top_n,
         horizon=args.horizon, selected=selected)
     show("多因子(选中, IS)", r_is)
     show("多因子(全因子, IS)", M.walk_forward_backtest(
-        z, ic, blob["close"], blob["open"], blob["low"], qpanel,
+        z, ic, blob["close"], blob["open"], blob["low"], qpanel, highs=blob["high"],
         start=args.is_start, end=args.holdout, top_n=args.top_n,
         horizon=args.horizon))
     show("原反转策略(IS)", run_backtest(
@@ -65,12 +65,12 @@ def main():
 
     print("\n=== 冻结 holdout（%s→今，真样本外）===" % args.holdout)
     r_oos = M.walk_forward_backtest(
-        z, ic, blob["close"], blob["open"], blob["low"], qpanel,
+        z, ic, blob["close"], blob["open"], blob["low"], qpanel, highs=blob["high"],
         start=args.holdout, top_n=args.top_n, horizon=args.horizon,
         selected=selected)
     show("多因子(选中, OOS)", r_oos)
     show("多因子(全因子, OOS)", M.walk_forward_backtest(
-        z, ic, blob["close"], blob["open"], blob["low"], qpanel,
+        z, ic, blob["close"], blob["open"], blob["low"], qpanel, highs=blob["high"],
         start=args.holdout, top_n=args.top_n, horizon=args.horizon))
     show("原反转策略(OOS)", run_backtest(
         start=args.holdout, top_n=args.top_n, hold_days=args.horizon,
