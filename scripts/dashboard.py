@@ -12,6 +12,12 @@ import streamlit as st
 st.set_page_config(page_title="fireworks-sp", page_icon="🎆",
                    layout="wide")
 
+from ui import (inject_css, sidebar_nav, section_title, metric_row,  # noqa: E402
+                card_container, badge, alert_banner, candle_chart,
+                ratio_bar, pareto_scatter, timeline, equity_curve,
+                factor_bar, freq_bar)
+inject_css()
+
 from fwsp.backtest import run_backtest  # noqa: E402
 from fwsp.config import FILTERS  # noqa: E402
 from fwsp.db import get_conn, init_schema  # noqa: E402
@@ -108,46 +114,45 @@ with st.sidebar:
     st.caption(f"数据更新: {meta['last_update'] or '—'}")
     st.caption(f"股票池 {meta['stocks']} | K线覆盖 {meta['codes']} | "
                f"最新交易日 {meta['last_bar'] or '—'}")
-    page = st.radio("页面", ["今日推荐", "个股查询", "策略回测", "多因子策略",
-                             "推荐追踪", "因子进化", "因子库", "进化历史"],
-                    label_visibility="collapsed")
+    page = sidebar_nav(["今日推荐", "个股查询", "策略回测", "多因子策略",
+                        "推荐追踪", "因子进化", "因子库", "进化历史"])
     st.divider()
     st.caption("候选池生成器，非投资建议。\n买入需独立判断并严格止损。")
 
 # ---------------------------------------------------------------- pages
 
 if page == "今日推荐":
-    st.header(f"今日 Top {FILTERS['top_n']} 候选")
+    section_title(f"今日 Top {FILTERS['top_n']} 候选")
     run_date, recos = latest_recommendations()
     if not recos:
         st.info("还没有推荐记录。先运行 scripts/recommend.py")
         st.stop()
 
-    cols = st.columns(FILTERS["top_n"] if FILTERS['top_n'] <= 5 else 5)
     avg_score = sum(r["score"] for r in recos) / len(recos)
-    kpis = [("平均评分", f"{avg_score:.1f}"),
-            ("入选数", str(len(recos))),
-            ("信号日期", run_date)]
-    for i, (label, val) in enumerate(kpis):
-        with cols[i % len(cols)]:
-            st.metric(label, val)
+    metric_row([
+        {"label": "平均评分", "value": f"{avg_score:.1f}"},
+        {"label": "入选数", "value": str(len(recos))},
+        {"label": "信号日期", "value": run_date},
+    ])
 
     for r in recos:
         mv_yi = (r["metrics"].get("total_mv") or 0) / 1e8
         head = (f"#{r['rank']} {r['name']} ({r['code']})  ·  "
                 f"{r['industry'] or '—'}  ·  评分 {r['score']:.0f}  ·  "
                 f"¥{r['price']:.2f}")
-        body = (" · ".join(r["reasons"]))
-        tail = (f"PE {r['metrics'].get('pe_dyn') or '—'} | "
-                f"PB {r['metrics'].get('pb') or '—'} | "
-                f"ROE {r['metrics'].get('roe') or '—'}% | "
-                f"市值 {mv_yi:.0f}亿")
-        with st.expander(head):
-            st.write(body)
+        with card_container(head):
+            # reasons as badges
+            reasons_html = " ".join(badge(txt, "info") for txt in r["reasons"])
+            if reasons_html:
+                st.markdown(reasons_html, unsafe_allow_html=True)
+            tail = (f"PE {r['metrics'].get('pe_dyn') or '—'} | "
+                    f"PB {r['metrics'].get('pb') or '—'} | "
+                    f"ROE {r['metrics'].get('roe') or '—'}% | "
+                    f"市值 {mv_yi:.0f}亿")
             st.caption(tail)
-            df = load_kline(r["code"])
-            if len(df):
-                st.plotly_chart(candle_chart(df), use_container_width=True)
+            kdf = load_kline(r["code"])
+            if len(kdf):
+                _echarts(candle_chart(kdf), height=380)
 
 elif page == "个股查询":
     st.header("个股K线与指标")
@@ -161,11 +166,12 @@ elif page == "个股查询":
                             "贵州茅台 (600519)")
                         if "贵州茅台 (600519)" in code_map else 0)
     if pick:
-        df = load_kline(code_map[pick])
-        st.plotly_chart(candle_chart(df), use_container_width=True)
-        with st.expander("最近行情"):
-            st.dataframe(df.tail(15).iloc[:, :6].sort_values(
-                "date", ascending=False).set_index("date"))
+        kdf = load_kline(code_map[pick])
+        _echarts(candle_chart(kdf), height=460)
+        with card_container("最近行情"):
+            st.dataframe(kdf.tail(15).iloc[:, :6].sort_values(
+                "date", ascending=False).set_index("date"),
+                use_container_width=True, hide_index=True)
 
 elif page == "策略回测":
     st.header("策略回测")
@@ -189,15 +195,17 @@ elif page == "策略回测":
 
     res = st.session_state.get("bt")
     if res:
-        k1, k2, k3, k4, k5 = st.columns(5)
-        bench = f"(基准 {res['bench_return']*100:+.1f}%)" \
-            if res["bench_return"] is not None else ""
-        k1.metric("总收益", f"{res['total_return']*100:+.1f}%", bench)
-        k2.metric("年化", f"{res['cagr']*100:+.1f}%")
-        k3.metric("最大回撤", f"{res['max_drawdown']*100:.1f}%")
-        k4.metric("胜率", f"{res['win_rate']*100:.0f}%",
-                  f"{res['n_trades']}笔")
-        k5.metric("夏普", f"{res['sharpe']:.2f}")
+        bench_pct = f"{res['bench_return']*100:+.1f}%" if res["bench_return"] is not None else "—"
+        metric_row([
+            {"label": "总收益", "value": f"{res['total_return']*100:+.1f}%",
+             "delta": f"基准 {bench_pct}",
+             "delta_type": "positive" if (res["bench_return"] or 0) > 0 else "negative"},
+            {"label": "年化", "value": f"{res['cagr']*100:+.1f}%"},
+            {"label": "最大回撤", "value": f"{res['max_drawdown']*100:.1f}%"},
+            {"label": "胜率", "value": f"{res['win_rate']*100:.0f}%",
+             "delta": f"{res['n_trades']}笔"},
+            {"label": "夏普", "value": f"{res['sharpe']:.2f}"},
+        ])
 
         eq = pd.Series(res["equity"])
         eq.index = pd.to_datetime(eq.index)
@@ -209,17 +217,12 @@ elif page == "策略回测":
                 "AND date BETWEEN ? AND ? ORDER BY date",
                 (res["start"], res["end"])).fetchall()
         bdf = pd.DataFrame(b, columns=["date", "close"])
-        fig = go.Figure()
-        fig.add_trace(go.Scatter(x=eq_n.index, y=eq_n.values,
-                                 name="策略", line=dict(color="#f59e0b")))
+        bench_s = None
         if len(bdf) > 1:
-            bn = bdf["close"] / bdf["close"].iloc[0]
-            fig.add_trace(go.Scatter(x=pd.to_datetime(bdf["date"]), y=bn,
-                                     name="沪深300",
-                                     line=dict(color="#64748b", width=1)))
-        fig.update_layout(height=380, margin=dict(l=8, r=8, t=16, b=8),
-                          legend=dict(orientation="h"))
-        st.plotly_chart(fig, use_container_width=True)
+            bench_s = bdf.set_index(pd.to_datetime(bdf["date"]))["close"]
+            bench_s = bench_s / bench_s.iloc[0]
+        with card_container("净值曲线"):
+            _echarts(equity_curve(eq_n, bench_s), height=400)
 
 elif page == "多因子策略":
     st.header("多因子策略（walk-forward 自动挖掘）")
@@ -235,11 +238,18 @@ elif page == "多因子策略":
         summ = json.loads(raw[0]) if raw else None
         st.caption("选中因子: " + ", ".join(selected))
         if summ:
-            c1, c2, c3, c4 = st.columns(4)
-            c1.metric("OOS 总收益", f"{summ['oos_total_return']*100:+.1f}%")
-            c2.metric("OOS 夏普", f"{summ['oos_sharpe']:.2f}")
-            c3.metric("OOS 回撤", f"{summ['oos_max_drawdown']*100:.1f}%")
-            c4.metric("OOS 胜率", f"{summ['oos_win_rate']*100:.0f}%")
+            oos_ret = summ['oos_total_return']*100
+            oos_sh = summ['oos_sharpe']
+            oos_ret_cls = "positive" if oos_ret > 0 else "negative"
+            oos_sh_cls  = "positive" if oos_sh > 0 else "negative"
+            metric_row([
+                {"label": "OOS 总收益", "value": f"{oos_ret:+.1f}%",
+                 "delta_type": oos_ret_cls},
+                {"label": "OOS 夏普", "value": f"{oos_sh:.2f}",
+                 "delta_type": oos_sh_cls},
+                {"label": "OOS 回撤", "value": f"{summ['oos_max_drawdown']*100:.1f}%"},
+                {"label": "OOS 胜率", "value": f"{summ['oos_win_rate']*100:.0f}%"},
+            ])
             st.caption(f"样本外窗口 {summ['holdout']}→今；"
                        f"对比 IS 总收益 {summ['is_total_return']*100:+.1f}% / "
                        f"夏普 {summ['is_sharpe']:.2f}。非投资建议。")
@@ -295,13 +305,14 @@ elif page == "多因子策略":
                     rebal=('M' if freq == '月' else 'W'),
                     trail=(float(trl) if trl > 0 else None),
                     selected=selected)
-            c1, c2, c3, c4, c5 = st.columns(5)
-            c1.metric("总收益", f"{res['total_return']*100:+.1f}%")
-            c2.metric("年化", f"{res['cagr']*100:+.1f}%")
-            c3.metric("最大回撤", f"{res['max_drawdown']*100:.1f}%")
-            c4.metric("胜率", f"{res['win_rate']*100:.0f}%",
-                      f"{int(res['n_trades'])}笔")
-            c5.metric("夏普", f"{res['sharpe']:.2f}")
+            metric_row([
+                {"label": "总收益", "value": f"{res['total_return']*100:+.1f}%"},
+                {"label": "年化",   "value": f"{res['cagr']*100:+.1f}%"},
+                {"label": "最大回撤", "value": f"{res['max_drawdown']*100:.1f}%"},
+                {"label": "胜率",   "value": f"{res['win_rate']*100:.0f}%",
+                 "delta": f"{int(res['n_trades'])}笔"},
+                {"label": "夏普",   "value": f"{res['sharpe']:.2f}"},
+            ])
             eq = res["equity"]
             eq_n = eq / eq.iloc[0]
             with get_conn() as conn:
@@ -311,17 +322,12 @@ elif page == "多因子策略":
                     (str(eq.index[0].date()), str(eq.index[-1].date()))
                 ).fetchall()
             bdf = pd.DataFrame(b, columns=["date", "close"])
-            fig = go.Figure()
-            fig.add_trace(go.Scatter(x=eq_n.index, y=eq_n.values,
-                                     name="多因子", line=dict(color="#f59e0b")))
+            bench_s = None
             if len(bdf) > 1:
-                bn = bdf["close"] / bdf["close"].iloc[0]
-                fig.add_trace(go.Scatter(x=pd.to_datetime(bdf["date"]), y=bn,
-                                         name="沪深300",
-                                         line=dict(color="#64748b", width=1)))
-            fig.update_layout(height=380, margin=dict(l=8, r=8, t=16, b=8),
-                              legend=dict(orientation="h"))
-            st.plotly_chart(fig, use_container_width=True)
+                bench_s = bdf.set_index(pd.to_datetime(bdf["date"]))["close"]
+                bench_s = bench_s / bench_s.iloc[0]
+            with card_container("净值曲线"):
+                _echarts(equity_curve(eq_n, bench_s), height=400)
 
 elif page == "推荐追踪":
     st.header("历史推荐表现追踪")
@@ -329,15 +335,19 @@ elif page == "推荐追踪":
         update_tracking()
         st.cache_data.clear()
     s = summary_stats()
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("累计推荐", s["total_recommendations"])
     wr5 = s["win_rate_5d"]
-    c2.metric("5日胜率", f"{wr5*100:.0f}%" if wr5 is not None else "—",
-              f"样本{int(s['tracked_5d'])}" if s["tracked_5d"] else None)
-    a5 = s["avg_ret_5d"]
-    c3.metric("5日均收益", f"{a5:+.2f}%" if a5 is not None else "—")
+    a5  = s["avg_ret_5d"]
     a20 = s["avg_ret_20d"]
-    c4.metric("20日均收益", f"{a20:+.2f}%" if a20 is not None else "—")
+    metric_row([
+        {"label": "累计推荐", "value": str(s["total_recommendations"]),
+         "delta": f"样本{int(s['tracked_5d'])}" if s["tracked_5d"] else None},
+        {"label": "5日胜率",  "value": f"{wr5*100:.0f}%" if wr5 is not None else "—",
+         "delta_type": "positive" if wr5 and wr5 > 0.5 else "negative" if wr5 and wr5 < 0.45 else "neutral"},
+        {"label": "5日均收益", "value": f"{a5:+.2f}%" if a5 is not None else "—",
+         "delta_type": "positive" if a5 and a5 > 0 else "negative" if a5 and a5 < 0 else "neutral"},
+        {"label": "20日均收益", "value": f"{a20:+.2f}%" if a20 is not None else "—",
+         "delta_type": "positive" if a20 and a20 > 0 else "negative" if a20 and a20 < 0 else "neutral"},
+    ])
 
     with get_conn() as conn:
         hist = pd.read_sql(
@@ -372,41 +382,28 @@ elif page == "因子进化":
         lambda r: ratio_alert(r["is_icir"], r["oos_icir"])[0], axis=1)
     df["alert"] = alerts
 
-    # OOS/IS 比率条形图，告警标红
-    fig = go.Figure()
-    colors = df["alert"].map({True: "#ef4444", False: "#3b82f6"})
-    fig.add_trace(go.Bar(
-        x=df["code"], y=df["oos_is_ratio"],
-        marker_color=colors, name="OOS/IS"))
-    fig.add_hline(y=5.0, line_dash="dash", line_color="#ef4444",
-                  annotation_text="过拟合阈值 5.0")
-    fig.add_hline(y=0.3, line_dash="dash", line_color="#f59e0b",
-                  annotation_text="失效阈值 0.3")
-    fig.update_layout(height=420, margin=dict(l=8, r=8, t=16, b=8),
-                      xaxis_tickangle=-45, showlegend=False)
-    st.plotly_chart(fig, use_container_width=True)
+    with card_container("OOS/IS 比率（红=告警）"):
+        thresholds = [(5.0, "#ef4444"), (0.3, "#f59e0b")]
+        _echarts(ratio_bar(df, "code", "oos_is_ratio", thresholds), height=420)
+    with card_container("Pareto: IS vs OOS（绿=净成本 IR 高）"):
+        _echarts(pareto_scatter(df, "is_icir", "oos_icir", "net_ir"), height=380)
 
-    # Pareto 散点：IS vs OOS ICIR，颜色=净成本 IR（可交易性）
-    fig2 = go.Figure()
-    fig2.add_trace(go.Scatter(
-        x=df["is_icir"], y=df["oos_icir"], mode="markers",
-        marker=dict(size=11, color=df["net_ir"], colorscale="RdYlGn",
-                    showscale=True, colorbar=dict(title="净成本IR"),
-                    line=dict(width=1, color="#0f172a")),
-        text=df["code"], hoverinfo="text+x+y"))
-    fig2.add_shape(type="line", x0=df["is_icir"].min(), y0=df["is_icir"].min(),
-                   x1=df["is_icir"].max(), y1=df["is_icir"].max(),
-                   line=dict(dash="dot", color="#64748b"))
-    fig2.update_layout(height=380, margin=dict(l=8, r=8, t=16, b=8),
-                       xaxis_title="IS ICIR", yaxis_title="OOS ICIR",
-                       title="Pareto: 样本内 vs 样本外（绿=净成本 IR 高）")
-    st.plotly_chart(fig2, use_container_width=True)
+    # guard status banner
+    n_alert = int(df["alert"].sum())
+    n_bad   = int((df["net_ir"] <= 0).sum())
+    if n_alert:
+        alert_banner(f"⚠ {n_alert} 个因子 OOS/IS 比率告警（疑似过拟合）", "warning")
+    if n_bad:
+        alert_banner(f"⛔ {n_bad} 个因子净成本 IR≤0（不可交易）", "danger")
 
-    k1, k2, k3, k4 = st.columns(4)
-    k1.metric("评估因子数", len(df))
-    k2.metric("入选因子数", int(df["selected"].sum()))
-    k3.metric("告警因子数", int(df["alert"].sum()))
-    k4.metric("净成本IR<=0(不可交易)", int((df["net_ir"] <= 0).sum()))
+    metric_row([
+        {"label": "评估因子数", "value": str(len(df))},
+        {"label": "入选因子数", "value": str(int(df["selected"].sum()))},
+        {"label": "告警因子数", "value": str(n_alert),
+         "delta_type": "warning" if n_alert else "success"},
+        {"label": "不可交易",   "value": str(n_bad),
+         "delta_type": "danger" if n_bad else "success"},
+    ])
 
     st.subheader("因子明细")
     show = df.copy()
@@ -443,21 +440,24 @@ elif page == "因子库":
     if src:
         lib = lib[lib["source"].isin(src)]
 
-    fig = go.Figure()
-    fig.add_trace(go.Bar(
-        x=lib["code"], y=lib["oos_icir"].fillna(0),
-        marker_color=lib["net_ir"].fillna(0).map(
-            lambda v: "#ef4444" if v <= 0 else "#3b82f6"),
-        name="OOS ICIR"))
-    fig.update_layout(height=420, margin=dict(l=8, r=8, t=16, b=8),
-                      xaxis_tickangle=-45, showlegend=False)
-    st.plotly_chart(fig, use_container_width=True)
-
-    c1, c2, c3 = st.columns(3)
-    c1.metric("因子总数", len(lib))
-    c2.metric("社区来源", int((lib["source"] != "auto_evolve").sum()))
-    c3.metric("净成本IR>0 可交易", int((lib["net_ir"] > 0).sum()))
-    st.dataframe(lib.round(3), use_container_width=True, hide_index=True)
+    with card_container("OOS ICIR（红=不可交易）"):
+        _echarts(factor_bar(lib, "code", "oos_icir", color_col="net_ir"), height=420)
+    metric_row([
+        {"label": "因子总数", "value": str(len(lib))},
+        {"label": "社区来源", "value": str(int((lib["source"] != "auto_evolve").sum()))},
+        {"label": "可交易",   "value": str(int((lib["net_ir"] > 0).sum())),
+         "delta_type": "success"},
+    ])
+    # source badges in table
+    lib_display = lib.copy()
+    lib_display["source_badge"] = lib_display["source"].apply(
+        lambda s: badge("auto", "info") if s == "auto_evolve"
+        else badge(s.split("_")[0] if s else "—", "muted"))
+    show_cols = ["code", "category", "source_badge", "desc",
+                 "is_icir", "oos_icir", "net_ir", "stability", "selected"]
+    with card_container("因子明细"):
+        st.dataframe(lib_display[show_cols].round(3), use_container_width=True,
+                     hide_index=True)
 
 elif page == "进化历史":
     st.header("进化历史 · 自动进化时间线")
@@ -478,12 +478,8 @@ elif page == "进化历史":
         lambda s: len(json.loads(s)) if s else 0)
     ev["new_oos"] = ev["new_oos"].astype(float)
 
-    fig = go.Figure()
-    fig.add_trace(go.Scatter(x=ev["run_at"], y=ev["new_oos"], mode="lines+markers",
-                             name="新 OOS ICIR", line=dict(color="#f59e0b")))
-    fig.update_layout(height=340, margin=dict(l=8, r=8, t=16, b=8),
-                      xaxis_title="运行时间", yaxis_title="晋升后 OOS ICIR")
-    st.plotly_chart(fig, use_container_width=True)
+    with card_container("OOS 走势（绿点=晋升）"):
+        _echarts(timeline(ev), height=340)
 
     # 因子入选频率（跨运行）
     from collections import Counter
@@ -494,14 +490,13 @@ elif page == "进化历史":
     if cnt:
         fc = pd.DataFrame(cnt.items(), columns=["factor", "times_selected"])
         fc = fc.sort_values("times_selected", ascending=False)
-        st.subheader("因子入选频率（跨进化轮次）")
-        st.bar_chart(fc.set_index("factor")["times_selected"])
+        with card_container("因子入选频率（跨进化轮次）"):
+            _echarts(freq_bar(fc), height=320)
 
     st.subheader("历次进化记录")
     for _, r in ev.iterrows():
-        tag = "✅晋升" if r["promoted"] else "⛔未晋升"
-        with st.expander(f"{r['run_at']}  {tag}  OOS={r['new_oos']:.3f}  "
-                         f"入选{int(r['n_selected'])}只"):
+        tag_html = badge("✅ 晋升", "success") if r["promoted"] else badge("⛔ 未晋升", "danger")
+        with card_container(f"{r['run_at']}  OOS={r['new_oos']:.3f}  入选{int(r['n_selected'])}只  {tag_html}"):
             st.write("入选因子:", ", ".join(json.loads(r["selected_json"] or "[]")))
             if r["notes"]:
                 st.caption(r["notes"])

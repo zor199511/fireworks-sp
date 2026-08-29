@@ -10,6 +10,7 @@ dependencies = [
     "plotly>=5.24",
     "pyyaml>=6.0.3",
     "streamlit>=1.40",
+    "streamlit-echarts>=0.4",
 ]
 
 [tool.uv]
