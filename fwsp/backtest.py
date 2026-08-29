@@ -5,12 +5,10 @@ from datetime import date
 import numpy as np
 import pandas as pd
 
+from .costs import COST_BUY, COST_SELL
 from .db import get_conn
 
 log = logging.getLogger("fwsp.backtest")
-
-COST_BUY = 0.00025 + 0.001      # commission + slippage
-COST_SELL = 0.00025 + 0.0005 + 0.001  # commission + stamp tax + slippage
 
 
 def load_panels(conn) -> dict[str, pd.DataFrame]:

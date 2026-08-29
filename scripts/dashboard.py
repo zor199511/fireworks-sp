@@ -95,7 +95,7 @@ def candle_chart(df: pd.DataFrame) -> go.Figure:
 def build_multifactor():
     with get_conn() as conn:
         blob = F.build_factor_panel(conn)
-        fwd = F.forward_returns(blob["close"])
+        fwd = F.forward_returns(blob)
         quality = blob["quality"]
     z, ic = M.precompute(blob["factors"], fwd, quality, 10)
     return z, ic, blob["close"], blob["open"], blob["low"], quality
@@ -332,12 +332,13 @@ elif page == "多因子策略":
     st.divider()
     st.subheader("参数化多因子回测")
     st.caption("用已挖掘因子 + 时间变化质量面板跑 walk-forward（不做 Greedy 重选）。")
-    rc1, rc2, rc3, rc4, rc5 = st.columns(5)
+    rc1, rc2, rc3, rc4, rc5, rc6 = st.columns(6)
     freq = rc1.selectbox("调仓频率", ["周", "月"], index=0, key="mf_freq")
     hzn = rc2.number_input("持有天数", 5, 40, 10, key="mf_hold")
     stp = rc3.number_input("止损%", -30, -1, -8, key="mf_stop")
     trl = rc4.number_input("跟踪止损%", 0, 30, 0, key="mf_trail")
     tpn = rc5.number_input("Top N", 3, 30, 10, key="mf_topn")
+    tpp = rc6.number_input("止盈%", 0, 30, 0, key="mf_tp")
     if st.button("运行多因子回测", key="mf_run", type="primary"):
         if not selected:
             st.warning("请先挖掘因子（上方按钮）。")
@@ -351,6 +352,7 @@ elif page == "多因子策略":
                     top_n=int(tpn), horizon=int(hzn), stop_pct=float(stp),
                     rebal=('M' if freq == '月' else 'W'),
                     trail=(float(trl) if trl > 0 else None),
+                    profit_pct=(float(tpp) if tpp > 0 else None),
                     selected=selected)
             metric_row([
                 {"label": "总收益", "value": f"{res['total_return']*100:+.1f}%"},

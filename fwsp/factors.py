@@ -124,10 +124,19 @@ def quality_mask(conn, min_circ_mv=3e9, min_roe=0.0,
     return set(df.loc[mask.to_numpy(), "code"])
 
 
-def forward_returns(close, horizons=HORIZONS):
+def forward_returns(panels, horizons=HORIZONS):
+    """T+1 开盘买入、持有 horizon 日、T+horizon 开盘卖出之收益。
+
+    与 factor_mining.forward_returns（auto_evolve 晋升标签）保持一致，
+    消除「晋升用 open→open、实盘权重用 close→close」的标签错位。
+    panels 需含 'open'（build_factor_panel 已返回）。
+    """
+    op = panels["open"]
     out = {}
     for hh in horizons:
-        out[hh] = close.pct_change(hh).shift(-hh)
+        buy = op.shift(-1)        # T+1 开盘
+        sell = op.shift(-hh)      # T+horizon 开盘
+        out[hh] = sell / buy - 1.0
     return out
 
 

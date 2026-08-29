@@ -4,10 +4,10 @@ from datetime import date
 import numpy as np
 import pandas as pd
 
+from .costs import COST_BUY, COST_SELL
+
 log = logging.getLogger("fwsp.multifactor")
 
-COST_BUY = 0.00025 + 0.001
-COST_SELL = 0.00025 + 0.0005 + 0.001
 HORIZONS = (5, 10, 20)
 
 
@@ -80,7 +80,7 @@ def walk_forward_backtest(zscores, ics, close, opn, low, quality,
                           start="2024-06-01", end=None, top_n=10,
                           horizon=10, stop_pct=-8.0, train_days=252,
                           capital=1_000_000.0, selected=None,
-                          rebal='W', trail=None):
+                          rebal='W', trail=None, profit_pct=None):
     end = end or str(date.today())
     zsel = zscores if selected is None else {k: v for k, v in zscores.items() if k in selected}
 
@@ -118,6 +118,10 @@ def walk_forward_backtest(zscores, ics, close, opn, low, quality,
                         lo <= peak_v * (1 - trail / 100):
                     sell_px = min(px_open, peak_v * (1 - trail / 100))
                     reason = "trail"
+                elif profit_pct is not None and profit_pct > 0 and \
+                        pd.notna(px) and px >= pos["buy_px"] * (1 + profit_pct / 100):
+                    sell_px = px_open
+                    reason = "tp"
                 elif held >= horizon:
                     sell_px = px_open
                     reason = "expire"

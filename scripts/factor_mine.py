@@ -24,7 +24,7 @@ def main():
     t0 = time.time()
     with get_conn() as conn:
         blob = F.build_factor_panel(conn)
-        fwd = F.forward_returns(blob["close"])
+        fwd = F.forward_returns(blob)
         quality = blob["quality"]
         qpanel = F.quality_panel(conn, blob["close"].index)
     print(f"[build] {len(blob['factors'])} 因子, 静态质量池 {len(quality)} 只, "
