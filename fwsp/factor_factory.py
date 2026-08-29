@@ -239,6 +239,7 @@ class FactorSpec:
     expr: str
     params: dict = field(default_factory=dict)
     desc: str = ""
+    source: str = ""
 
 
 def compute_factor(panels: dict[str, pd.DataFrame], spec: FactorSpec) -> pd.DataFrame:
@@ -288,9 +289,10 @@ def expand_recipes(base: list[dict], grid: dict[str, list]) -> list[FactorSpec]:
     specs: list[FactorSpec] = []
     for r in base:
         scan = r.get("scan", {}) or {}
+        src = r.get("source", "") or ""
         if not scan:
             specs.append(FactorSpec(r["id"], r["category"], r["expr"],
-                                    {}, r.get("desc", "")))
+                                    {}, r.get("desc", ""), source=src))
             continue
         # 笛卡尔积：每个占位符对应 grid 中的一个列表
         keys = list(scan.keys())
@@ -302,5 +304,6 @@ def expand_recipes(base: list[dict], grid: dict[str, list]) -> list[FactorSpec]:
             suffix = "_".join(f"{k}{v}" for k, v in subs.items())
             fid = f"{r['id']}__{suffix}"
             desc = f"{r.get('desc','')} [{', '.join(f'{k}={v}' for k,v in subs.items())}]"
-            specs.append(FactorSpec(fid, r["category"], expr, dict(subs), desc))
+            specs.append(FactorSpec(fid, r["category"], expr, dict(subs), desc,
+                                   source=src))
     return specs

@@ -172,7 +172,7 @@ def run_evolution(dry_run: bool = False) -> dict:
                 spec = next(s for s in specs if s.id == fid)
                 lib_rows.append((spec.id, spec.category, spec.expr,
                                 json.dumps(spec.params, ensure_ascii=False),
-                                spec.desc, "auto_evolve", run_at))
+                                spec.desc, spec.source or "auto_evolve", run_at))
             upsert_rows(conn, "factor_library",
                         ["code", "category", "expr", "params_json", "desc",
                          "source", "created_at"], lib_rows)
