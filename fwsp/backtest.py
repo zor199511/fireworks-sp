@@ -4,6 +4,7 @@ from datetime import date
 
 import numpy as np
 import pandas as pd
+import sqlite3
 
 from .costs import COST_BUY
 from .execution import (compute_shares, decide_exit, mark_equity,
@@ -13,10 +14,22 @@ from .db import get_conn
 log = logging.getLogger("fwsp.backtest")
 
 
-def load_panels(conn) -> dict[str, pd.DataFrame]:
-    rows = conn.execute(
-        "SELECT code,date,open,high,low,close,volume,amount FROM daily "
-        "ORDER BY date").fetchall()
+def load_panels(conn, adjust: str = "qfq") -> dict[str, pd.DataFrame]:
+    """加载价格面板。默认前复权(qfq,连续、除权日不跳变)；daily_qfq 缺失回退 daily。
+
+    与 factors.load_panels 同源口径，确保实盘回测与因子挖掘吃同一套价格。
+    """
+    table = "daily_qfq" if adjust == "qfq" else "daily"
+    try:
+        rows = conn.execute(
+            f"SELECT code,date,open,high,low,close,volume,amount FROM {table} "
+            "ORDER BY date").fetchall()
+    except sqlite3.OperationalError:
+        rows = []
+    if not rows and adjust == "qfq":
+        rows = conn.execute(
+            "SELECT code,date,open,high,low,close,volume,amount FROM daily "
+            "ORDER BY date").fetchall()
     df = pd.DataFrame(rows, columns=["code", "date", "open", "high", "low",
                                      "close", "volume", "amount"])
     panels = {}

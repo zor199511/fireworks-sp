@@ -136,8 +136,12 @@ systemctl --user enable --now fireworks-dashboard.service fireworks-daily.timer
 
 ## ⚠️ 已知限制
 
-- K 线为**不复权**价格：分红除权日指标小幅跳变；回测未复权
-- 反转策略回测仅重放技术面打分（基本面用当前值），且用当前成分股池 → **幸存者偏差**，结果偏乐观
+- **复权**：数据层已支持前复权（`daily_qfq` 表），`load_panels` 默认吃 qfq，除权日跳变已消除；
+  但**存量历史需重抓**才能落地（`python -c "from fwsp import collector, db; ..."` 或新增 CLI 触发
+  `collector.refetch_qfq_all` 全量重抓 qfq，约 15–20 分钟，受 akshare 限流）。重抓前旧库自动回退不复权价。
+- **幸存者偏差（已轻量收口）**：质量门槛改为 point-in-time——基本面按财报 `as_of` 前向填充，
+  披露前 False、披露后才 True（`quality_mask` 委托 `quality_panel`），IC 计算不再「用今天财报评判历史」。
+  但 Universe 仍含已退市股票历史、未引入成分股变动标记，结果仍偏乐观。
 - **多因子 OOS 窗口仅约 8 个月**，且仍属回测；选中因子 OOS 与「全因子」OOS 接近，说明在正确质量门槛下因子筛选增量有限
 - 债务率历史不完整：早期季度多为缺失（按「不违规」处理），最新期已密集；上游限流恢复后可重跑 `fwsp/backfill_debt.py` 补全
 - 银行等高杠杆行业债务率天然 >85%，会被质量门槛排除（已知局限）

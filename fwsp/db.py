@@ -36,6 +36,14 @@ CREATE TABLE IF NOT EXISTS daily (
     PRIMARY KEY (code, date)
 );
 CREATE INDEX IF NOT EXISTS idx_daily_date ON daily(date);
+CREATE TABLE IF NOT EXISTS daily_qfq (
+    code TEXT,
+    date TEXT,
+    open REAL, high REAL, low REAL, close REAL,
+    volume REAL, amount REAL,
+    PRIMARY KEY (code, date)
+);
+CREATE INDEX IF NOT EXISTS idx_daily_qfq_date ON daily_qfq(date);
 CREATE TABLE IF NOT EXISTS index_daily (
     code TEXT,
     date TEXT,
@@ -119,6 +127,11 @@ def init_schema(conn):
     # 旧库迁移：recommendations 增加 factor_set_id（因子集血缘）
     try:
         conn.execute("ALTER TABLE recommendations ADD COLUMN factor_set_id TEXT")
+    except sqlite3.OperationalError:
+        pass
+    # 旧库迁移：fin_q 增加 as_of（财报披露日，point-in-time 质量面板用）
+    try:
+        conn.execute("ALTER TABLE fin_q ADD COLUMN as_of TEXT")
     except sqlite3.OperationalError:
         pass
 

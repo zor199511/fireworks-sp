@@ -425,6 +425,7 @@ dependencies = [
     { name = "plotly" },
     { name = "pyyaml" },
     { name = "streamlit" },
+    { name = "streamlit-echarts" },
 ]
 
 [package.dev-dependencies]
@@ -440,6 +441,7 @@ requires-dist = [
     { name = "plotly", specifier = ">=5.24" },
     { name = "pyyaml", specifier = ">=6.0.3" },
     { name = "streamlit", specifier = ">=1.40" },
+    { name = "streamlit-echarts", specifier = ">=0.4" },
 ]
 
 [package.metadata.requires-dev]
@@ -1362,6 +1364,18 @@ dependencies = [
 sdist = { url = "https://pypi.tuna.tsinghua.edu.cn/packages/50/94/928c44a8b7bcd602fc4a16025e9868bcdb88b92bcdb2e53dec188d034fc4/streamlit-1.62.0.tar.gz", hash = "sha256:9d2571da6e6799cbaf0f59548f5773926260a87a69807cf3e2f0f68f9f5e4d45", size = 9883501, upload-time = "2026-08-19T18:31:22.864Z" }
 wheels = [
     { url = "https://pypi.tuna.tsinghua.edu.cn/packages/2b/57/78864764c53885db8a378cc1c47329b4b6e095f7ebd89cd1ffcca4027c89/streamlit-1.62.0-py3-none-any.whl", hash = "sha256:294dbcfe0d6531b0d8593a095e6872dcc6ec4b731723fbb318a0f8102e69162e", size = 10490146, upload-time = "2026-08-19T18:31:19.957Z" },
+]
+
+[[package]]
+name = "streamlit-echarts"
+version = "0.7.0"
+source = { registry = "https://pypi.tuna.tsinghua.edu.cn/simple" }
+dependencies = [
+    { name = "streamlit" },
+]
+sdist = { url = "https://pypi.tuna.tsinghua.edu.cn/packages/7b/3f/379203fed5c1ea0128f3d09a42dd3e992621081b0f01fd96283dd215abef/streamlit_echarts-0.7.0.tar.gz", hash = "sha256:831fffa4daba03b31afaf560aa5e5947b021ccf714e41c456c82301f9af06089", size = 700422, upload-time = "2026-06-08T04:43:38.602Z" }
+wheels = [
+    { url = "https://pypi.tuna.tsinghua.edu.cn/packages/44/32/c4ff3617e29c0afcad19d19f76618dd51f7e9a88031336e4ff56d28520bd/streamlit_echarts-0.7.0-py3-none-any.whl", hash = "sha256:f9d20cb8b7075070cd72ee815ca4113ab5047264a142ba581eb8d9d60fa6b076", size = 702553, upload-time = "2026-06-08T04:43:36.99Z" },
 ]
 
 [[package]]

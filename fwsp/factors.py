@@ -1,4 +1,5 @@
 import logging
+import sqlite3
 
 import numpy as np
 import pandas as pd
@@ -10,16 +11,27 @@ log = logging.getLogger("fwsp.factors")
 HORIZONS = (5, 10, 20)
 
 
-def load_panels(conn):
-    rows = conn.execute(
-        "SELECT code,date,open,high,low,close,volume,amount FROM daily "
-        "ORDER BY date").fetchall()
+def load_panels(conn, adjust: str = "qfq"):
+    """加载价格面板。adjust='qfq'(默认) 用前复权价(连续、除权日不跳变)；
+    adjust='' 用不复权原始价。daily_qfq 表缺失/为空时回退 daily，保证向前兼容。
+    """
+    table = "daily_qfq" if adjust == "qfq" else "daily"
+    try:
+        rows = conn.execute(
+            f"SELECT code,date,open,high,low,close,volume,amount FROM {table} "
+            "ORDER BY date").fetchall()
+    except sqlite3.OperationalError:
+        rows = []
+    if not rows and adjust == "qfq":
+        rows = conn.execute(
+            "SELECT code,date,open,high,low,close,volume,amount FROM daily "
+            "ORDER BY date").fetchall()
     df = pd.DataFrame(rows, columns=["code", "date", "open", "high", "low",
                                      "close", "volume", "amount"])
     df["date"] = pd.to_datetime(df["date"])
     panels = {}
     for col in ("open", "high", "low", "close", "volume", "amount"):
-        p = df.pivot(index="date", columns="code", values=col).sort_index()
+        p = df.pivot(index="date", columns="code", values=col)
         panels[col] = p
     return panels
 
@@ -94,34 +106,21 @@ def build_factor_panel(conn):
 
 def quality_mask(conn, min_circ_mv=3e9, min_roe=0.0,
                  min_profit_yoy=None, max_debt_ratio=85.0,
-                 exclude_st=True):
-    """当前静态质量门槛，返回 set(keep codes)。
+                 exclude_st=True, dates=None):
+    """Point-in-time 质量门槛，返回 DataFrame(bool, dates x codes)。
 
-    注意：fin_q 仅含最新两季，无历史序列，故此门槛不可代表历史财务状态，
-    仅作‘当下’质量过滤，回测中恒为同一集合（局限已在注释标明）。
+    基本面按财报 as_of 前向填充（point-in-time，消除『用今天财报评判历史』
+    的幸存者偏差）；市值/ST 用当前值。dates 为空时回退全 daily 日期索引。
+
+    返回 bool DataFrame 后，rank_ic_series / walk_forward_backtest 可逐日按
+    当日质量集过滤（同 quality_panel 契约），不再恒为同一静态集合。
     """
-    codes = pd.read_sql(
-        "SELECT code,name,industry,is_st FROM stock_list", conn)
-    spot = pd.read_sql(
-        "SELECT code,circ_mv,total_mv,pe_dyn,pb FROM spot", conn)
-    fin = pd.read_sql(
-        "SELECT code,roe,profit_yoy,gross_margin,debt_ratio,period "
-        "FROM fin_q", conn)
-    fin = fin.sort_values("period").groupby("code").tail(1)
-    df = codes.merge(spot, on="code", how="left").merge(fin, on="code", how="left")
-    mask = pd.Series(True, index=df.index)
-    if exclude_st:
-        mask &= (df["is_st"].fillna(0) == 0)
-    mask &= (df["circ_mv"].fillna(0) >= min_circ_mv)
-    # 基本面缺失不算违规（fin_q 仅含当前期，多数股无历史序列）
-    has_roe = df["roe"].notna()
-    mask &= (~has_roe) | (df["roe"] >= min_roe)
-    if min_profit_yoy is not None:
-        has_py = df["profit_yoy"].notna()
-        mask &= (~has_py) | (df["profit_yoy"] >= min_profit_yoy)
-    has_debt = df["debt_ratio"].notna()
-    mask &= (~has_debt) | (df["debt_ratio"] <= max_debt_ratio)
-    return set(df.loc[mask.to_numpy(), "code"])
+    if dates is None:
+        rows = conn.execute("SELECT DISTINCT date FROM daily ORDER BY date").fetchall()
+        dates = pd.DatetimeIndex([pd.Timestamp(r[0]) for r in rows])
+    return quality_panel(conn, dates, min_circ_mv=min_circ_mv, min_roe=min_roe,
+                          min_profit_yoy=min_profit_yoy,
+                          max_debt_ratio=max_debt_ratio, exclude_st=exclude_st)
 
 
 def forward_returns(panels, horizons=HORIZONS):

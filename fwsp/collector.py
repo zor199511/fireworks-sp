@@ -264,11 +264,17 @@ _DAILY_COLS = ["code", "date", "open", "high", "low", "close",
                "volume", "amount"]
 
 
-def fetch_daily_hist_em(code: str, start: str, end: str) -> list[tuple]:
+def fetch_daily_hist_em(code: str, start: str, end: str,
+                        adjust: str = "") -> list[tuple]:
+    """拉取单只日线。adjust='' 不复权(写 daily), adjust='qfq' 前复权(写 daily_qfq)。
+
+    前复权价格连续、除权日不跳变，因子/回测直接消费可消除分红除权造成的
+    虚假跳变（fireworks-sp 已知限制修复项）。
+    """
     symbol = str(code).zfill(6)
     df = ak.stock_zh_a_hist(symbol=symbol, period="daily",
                             start_date=start.replace("-", ""),
-                            end_date=end.replace("-", ""), adjust="")
+                            end_date=end.replace("-", ""), adjust=adjust)
     if df is None or df.empty:
         return []
 
@@ -281,6 +287,16 @@ def fetch_daily_hist_em(code: str, start: str, end: str) -> list[tuple]:
     a = col("成交额")
     return [(symbol, str(row[d])[:10], row[o], row[h], row[l], row[c],
              row[v], row[a]) for _, row in df.iterrows()]
+
+
+# daily_qfq 的列与 daily 一致（前复权 OHLCV），独立表以保留不复权原始价。
+_DAILY_QFQ_COLS = ["code", "date", "open", "high", "low", "close",
+                   "volume", "amount"]
+
+
+def fetch_daily_hist_em_qfq(code: str, start: str, end: str) -> list[tuple]:
+    """前复权日线（写 daily_qfq）。薄封装 fetch_daily_hist_em(adjust='qfq')。"""
+    return fetch_daily_hist_em(code, start, end, adjust="qfq")
 
 
 def fetch_daily_hist_baostock(code: str, start: str, end: str) -> list[tuple]:
@@ -444,6 +460,19 @@ def append_today_bars_from_snapshot(conn, todays_bars: list[tuple]):
     have = last_daily_dates(conn)
     fresh = [b for b in todays_bars if b[1] > have.get(b[0], "")]
     n = upsert_rows(conn, "daily", _DAILY_COLS, fresh)
+    # 同步前复权当日 bar：仅对当日新增的股票抓 qfq 写入 daily_qfq，
+    # 消除除权日跳变（增量窗口小、调用少，成本低）。
+    if fresh:
+        qfq_rows = []
+        for b in fresh:
+            code = b[0]
+            try:
+                q_rows = fetch_daily_hist_em_qfq(code, b[1], b[1])
+                qfq_rows.extend([r for r in q_rows if r[1] == b[1]])
+            except Exception:  # noqa: BLE001
+                pass
+        if qfq_rows:
+            upsert_rows(conn, "daily_qfq", _DAILY_QFQ_COLS, qfq_rows)
     return n
 
 
@@ -467,11 +496,55 @@ def backfill_gaps(conn, codes: list[str], lookback_days=10):
             if fresh:
                 upsert_rows(conn, "daily", _DAILY_COLS, fresh)
                 healed += len(fresh)
+            # 增量缺口顺带补前复权
+            qfq = fetch_daily_hist_em_qfq(code, start, end)
+            qfq_fresh = [r for r in qfq if not last or r[1] > last]
+            if qfq_fresh:
+                upsert_rows(conn, "daily_qfq", _DAILY_QFQ_COLS, qfq_fresh)
         except Exception:  # noqa: BLE001
             pass
         time.sleep(random.uniform(0.05, 0.15))
     conn.commit()
     return healed
+
+
+def refetch_qfq_all(conn, codes: list[str], start: str, workers=6):
+    """一次性全量重抓前复权日线写 daily_qfq（修复已知限制用）。
+
+    不复权 daily 表保持不变；本函数仅在需要补全 qfq 历史时手动/定时触发
+    （akshare 限流，约 15-20 分钟）。失败静默跳过，不影响主流程。
+    """
+    done = fail = 0
+    batch: list[tuple] = []
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    def flush():
+        nonlocal batch
+        if batch:
+            upsert_rows(conn, "daily_qfq", _DAILY_QFQ_COLS, batch)
+            conn.commit()
+            batch = []
+
+    end = str(today_cn())
+    with ThreadPoolExecutor(max_workers=workers) as ex:
+        futs = {ex.submit(fetch_daily_hist_em_qfq, c, start, end): c
+                for c in codes}
+        for fut in as_completed(futs):
+            code = futs[fut]
+            try:
+                rows = fut.result()
+                batch.extend(rows)
+                done += 1
+            except Exception:  # noqa: BLE001
+                fail += 1
+            if len(batch) >= 3000:
+                flush()
+            if done % 500 == 0:
+                flush()
+                log.info("qfq refetch progress: %d/%d fail=%d",
+                         done, len(codes), fail)
+    flush()
+    return done, fail
 
 
 # ------------------------------------------------------------------ index

@@ -52,6 +52,23 @@ def update_all(conn, full=False, skip_daily=False, source="auto"):
     return info
 
 
+def refetch_qfq(conn, source="auto"):
+    """一次性全量重抓前复权日线写 daily_qfq（修复不复权已知限制）。
+
+    不复权 daily 表保持不变；因 akshare 限流约 15–20 分钟，建议在空闲时手动/
+    定时触发（update_data.py --refetch-qfq）。失败静默跳过，不影响主流程。
+    """
+    from . import collector
+    codes = collector.universe_codes(conn)
+    log.info("refetch qfq for %d codes", len(codes))
+    done, fail = collector.refetch_qfq_all(conn, codes, HISTORY_START)
+    log.info("qfq refetch done: ok=%d fail=%d", done, fail)
+    db.set_meta(conn, "last_qfq_refetch",
+                datetime.now(ZoneInfo("Asia/Shanghai"))
+                .isoformat(timespec="seconds"))
+    return done, fail
+
+
 def build_push_message(recos, stats) -> tuple[str, str]:
     d = datetime.now(ZoneInfo("Asia/Shanghai")).strftime("%m-%d")
     title = f"🎆 fireworks-sp 精选 {d}（{len(recos)}只）"

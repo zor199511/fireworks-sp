@@ -20,17 +20,32 @@ def _zcross(x):
 
 
 def rank_ic_series(factor, fwd, quality):
-    """逐日期 RankIC（spearman）序列。手动 ranking 避免依赖 scipy。"""
+    """逐日期 RankIC（spearman）序列。手动 ranking 避免依赖 scipy。
+
+    quality 可为 set（静态质量集）或 bool DataFrame（point-in-time 时间变化面板，
+    索引=日期、列=股票，True 表示该日该股合格）。DataFrame 时逐日按当日合格集
+    过滤，消除『用今天财报评判历史』的幸存者偏差。
+    """
     common = factor.index.intersection(fwd.index)
     ics, idx = [], []
     fac = factor.reindex(common)
     fw = fwd.reindex(common)
+    is_df = isinstance(quality, pd.DataFrame)
     for d in common:
         fv = fac.loc[d]
         rv = fw.loc[d]
-        if quality:
-            fv = fv.drop(labels=fv.index.difference(list(quality)))
-            rv = rv.reindex(fv.index)
+        if quality is not None and (not isinstance(quality, (set, pd.DataFrame))
+                                    or len(quality) > 0):
+            if is_df:
+                if d not in quality.index:
+                    continue
+                q_keep = quality.loc[d]
+                keep = q_keep.index[q_keep.to_numpy()]
+                fv = fv.reindex(keep)
+                rv = rv.reindex(keep)
+            else:
+                fv = fv.drop(labels=fv.index.difference(list(quality)))
+                rv = rv.reindex(fv.index)
         pair = pd.concat([fv, rv], axis=1).dropna()
         if len(pair) < 50:
             continue
