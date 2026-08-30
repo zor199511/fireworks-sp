@@ -197,14 +197,16 @@ def factor_turnover(factor: pd.DataFrame) -> dict:
 def long_short_backtest(factor: pd.DataFrame, fwd: pd.DataFrame,
                         cost_buy: float = COST_BUY,
                         cost_sell: float = COST_SELL,
-                        top_frac: float = 0.1) -> dict:
+                        top_frac: float = 0.1,
+                        rebal: str = "D") -> dict:
     """成本敏感的多空组合（晋升 net_ir 量度）。
 
     实现已统一落在 `execution.long_short_backtest`，此处仅做签名兼容转发，
     确保全系统回测成本/执行语义单一来源（见 fwsp/execution.py）。
     """
     return _exec_long_short(factor, fwd, top_frac=top_frac,
-                            cost_buy=cost_buy, cost_sell=cost_sell)
+                            cost_buy=cost_buy, cost_sell=cost_sell,
+                            rebal=rebal)
 
 
 # --------------------------------------------------------------------------

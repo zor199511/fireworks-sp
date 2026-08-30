@@ -243,10 +243,23 @@ def quality_panel(conn, dates, min_circ_mv=3e9, min_roe=0.0,
     # 步骤为 no-op;但对于停牌股(daily 持续占位至末日)与新股(daily 从
     # 上市日起记录)能正确划定每只 code 在每日的 universe 资格,彻底消除
     # 『未上市已纳入』与『已退市但仍占位』两类幸存者偏差。
+    # 子代理 5 critical #1: 原 try/except+log.warning 静默降级, PIT 失败
+    # 但 IC 计算照跑 → 幸存者偏差修复形同虚设. 改为 ERROR + 写 meta 标记.
     try:
         code_fl = code_first_last_dates(conn)
         piv = _pit_boundaries(piv, code_fl)
     except Exception as e:  # noqa: BLE001
-        # PIT 边界失败不应阻塞质量面板(基本面前向填充仍有效)
-        log.warning("PIT universe boundaries failed: %s", e)
+        log.error("PIT universe boundaries failed: %s", e)
+        # 写 meta 让 dashboard / 告警能感知此降级
+        try:
+            from .db import set_meta
+            set_meta(conn, "pit_universe_degraded", "1")
+        except Exception:
+            pass
+    else:
+        try:
+            from .db import set_meta
+            set_meta(conn, "pit_universe_degraded", "0")
+        except Exception:
+            pass
     return piv

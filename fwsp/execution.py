@@ -84,21 +84,26 @@ def decide_exit(pos: dict, px_open, lo, hi, stop_pct: float,
 
 def long_short_backtest(factor: pd.DataFrame, fwd: pd.DataFrame,
                        top_frac: float = 0.1, cost_buy: float = COST_BUY,
-                       cost_sell: float = COST_SELL) -> dict:
+                       cost_sell: float = COST_SELL,
+                       rebal: str = "D") -> dict:
     """成本敏感多空组合（晋升路径 net_ir 的量度）。
 
     与 run_backtest / walk_forward_backtest 共用同一组 COST_BUY/COST_SELL 常量，
     统一落到 execution 层。每日按因子截面排名多前 top_frac、空后 top_frac，
-    次日开盘调仓。日频调仓下多空双腿各 100% 换手，故每日总交易成本按
-    2×(cost_buy+cost_sell) 计（多腿 + 空腿各一轮买卖），比单边模型更严格、
-    更贴近实盘——直接抬高「净成本 IR」门禁，过滤不可交易因子。
+    次日开盘调仓。
+
+    rebal: 调仓频率 'D' (日) / 'W' (周) / 'M' (月) — 子代理 2 critical #2
+    指出日频下 2×(c_b+c_s) ≈ 60bps/day = 150%/年 是『最严口径』, 不可达;
+    实盘多 W/M 调仓. 这里按 rebal 把日成本摊到对应频率: D=1, W=1/5, M=1/22.
     """
     r = factor.rank(axis=1, pct=True)
     long_sig = r >= (1 - top_frac)
     short_sig = r <= top_frac
     long_ret = fwd.where(long_sig).mean(axis=1)
     short_ret = fwd.where(short_sig).mean(axis=1)
-    daily_cost = 2 * (cost_buy + cost_sell)
+    # 日成本: 每次调仓多空各 1 次买+1 次卖; 摊到 1 天
+    rebal_days = {"D": 1, "W": 5, "M": 22}.get(rebal.upper(), 1)
+    daily_cost = 2 * (cost_buy + cost_sell) / rebal_days
     port = (long_ret - short_ret).dropna() - daily_cost
     port = port.dropna()
     if len(port) < 30 or port.std() == 0:

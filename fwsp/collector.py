@@ -270,11 +270,23 @@ def fetch_daily_hist_em(code: str, start: str, end: str,
 
     前复权价格连续、除权日不跳变，因子/回测直接消费可消除分红除权造成的
     虚假跳变（fireworks-sp 已知限制修复项）。
+
+    子代理 4 critical #4: EM 路径原本无 timeout, 单只卡死会挂整批(refetch_qfq
+    之前 PID 387161 即此场景). 这里加 socket.setdefaulttimeout(20) 防挂.
     """
+    import socket
     symbol = str(code).zfill(6)
-    df = ak.stock_zh_a_hist(symbol=symbol, period="daily",
-                            start_date=start.replace("-", ""),
-                            end_date=end.replace("-", ""), adjust=adjust)
+    old_timeout = socket.getdefaulttimeout()
+    socket.setdefaulttimeout(20)  # 防 EM 单只 socket 挂死
+    try:
+        df = ak.stock_zh_a_hist(symbol=symbol, period="daily",
+                                start_date=start.replace("-", ""),
+                                end_date=end.replace("-", ""), adjust=adjust)
+    except (socket.timeout, TimeoutError) as e:
+        log.warning("EM fetch %s 超时: %s", code, e)
+        return []
+    finally:
+        socket.setdefaulttimeout(old_timeout)
     if df is None or df.empty:
         return []
 

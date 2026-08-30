@@ -143,7 +143,7 @@ def run_evolution(dry_run: bool = False) -> dict:
         ic_series = daily_ic_series(f, fwd)
         stab = stability_check(ic_series, window=252)
         to = factor_turnover(f)
-        ls = long_short_backtest(f, fwd)
+        ls = long_short_backtest(f, fwd, rebal="W")  # 实盘周频调仓口径
         results[fid] = {
             "is_icir": ic["icir"], "oos_icir": wf["oos_icir"],
             "oos_is_ratio": oos_is_ratio(ic["icir"], wf["oos_icir"]),
