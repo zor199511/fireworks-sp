@@ -139,9 +139,14 @@ systemctl --user enable --now fireworks-dashboard.service fireworks-daily.timer
 - **复权**：数据层已支持前复权（`daily_qfq` 表），`load_panels` 默认吃 qfq，除权日跳变已消除；
   但**存量历史需重抓**才能落地（`python -c "from fwsp import collector, db; ..."` 或新增 CLI 触发
   `collector.refetch_qfq_all` 全量重抓 qfq，约 15–20 分钟，受 akshare 限流）。重抓前旧库自动回退不复权价。
-- **幸存者偏差（已轻量收口）**：质量门槛改为 point-in-time——基本面按财报 `as_of` 前向填充，
-  披露前 False、披露后才 True（`quality_mask` 委托 `quality_panel`），IC 计算不再「用今天财报评判历史」。
-  但 Universe 仍含已退市股票历史、未引入成分股变动标记，结果仍偏乐观。
+- **幸存者偏差（已轻量收口 + PIT universe）**：质量门槛改为 point-in-time——
+  基本面按财报 `as_of` 前向填充（披露前 False，披露后才 True），IC 计算不再
+  「用今天财报评判历史」；同时叠加 **PIT universe 边界**——`quality_panel`
+  末段按 `daily` 表每只 code 的首/末日叠加上市前/退市后剔除（`_pit_boundaries`
+  向量化），新股在 first_date 前不入 universe、停牌/退市股在 last_date 后不
+  入 universe。as_of 缺失时回退 `period + 30d`（财报披露日保守近似，旧库
+  `fin_q.as_of` 多为 NULL 时仍能工作）。但**未引入成分股变动标记**（如纳入
+  /调出沪深 300 的具体日期），结果仍可能偏乐观。
 - **多因子 OOS 窗口仅约 8 个月**，且仍属回测；选中因子 OOS 与「全因子」OOS 接近，说明在正确质量门槛下因子筛选增量有限
 - 债务率历史不完整：早期季度多为缺失（按「不违规」处理），最新期已密集；上游限流恢复后可重跑 `fwsp/backfill_debt.py` 补全
 - 银行等高杠杆行业债务率天然 >85%，会被质量门槛排除（已知局限）
