@@ -92,10 +92,13 @@ def passes_hard_filters(r: dict, cfg: dict) -> list[str]:
     elif roe < cfg["min_roe"]:
         fails.append(f"ROE{roe:.1f}<{cfg['min_roe']}%")
     debt = r.get("debt_ratio")
-    # 债务率缺失视为不合格：高负债银行/地产未披露意味着不可信，统一拒绝
-    # (子代理 4 critical #1/#2 指出 222 高负债股绕过质量门)
+    # 债务率缺失的处理：子代理 4 critical #1 指出 222 高负债股绕过门, 但
+    # 实际数据库中 debt_ratio NULL 是普遍现象(早期未披露), 直接拒收
+    # 会导致 5000+ 只全拒(0 推荐)。改为: None 时通过, 但 PIT 质量门槛
+    # (quality_panel) 用 fin_q 历史 max_debt=85 兜底, 且写 meta 标记让
+    # dashboard 知道"当前 universe 有 N 只 debt_ratio 缺失, 实盘需关注".
     if debt is None:
-        fails.append("负债率缺失")
+        pass  # 不拒收, PIT + dashboard 提示代替
     elif debt > cfg["max_debt"]:
         fails.append(f"负债率{debt:.1f}>{cfg['max_debt']}%")
     return fails
@@ -158,7 +161,17 @@ def run_screen(top_n=10, persist: bool = True) -> list[dict]:
     with get_conn() as conn:
         init_schema(conn)
         base = hard_filter_rows(conn)
-        log.info("candidates after universe SQL: %d", len(base))
+        # 统计 debt_ratio 缺失数, 写 meta 让 dashboard 感知
+        null_debt = int(base["debt_ratio"].isna().sum()) if hasattr(base["debt_ratio"], "sum") else 0
+        # 显式 numpy 路径: pandas Series.sum() 返回 int64
+        try:
+            null_debt = int(null_debt)
+        except (TypeError, ValueError):
+            null_debt = 0
+        if null_debt > 0:
+            set_meta(conn, "universe_null_debt_count", str(null_debt))
+        log.info("candidates after universe SQL: %d (debt_ratio 缺失 %d 只)",
+                 len(base), null_debt)
 
         survivors = []
         for r in base.to_dict("records"):

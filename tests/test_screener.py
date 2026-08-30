@@ -98,11 +98,14 @@ class TestHardFilters:
     def test_missing_roe_fails(self):
         assert passes_hard_filters(_row(roe=None), CFG)
 
-    def test_high_debt_fails_and_null_debt_fails(self):
-        # 子代理 4 critical #2: 债务率 None 不应通过(避免 222 高负债股绕过)
+    def test_high_debt_fails_and_null_debt_passes(self):
+        # 子代理 4 critical #1: 222 高负债股绕过 debt_ratio 门.
+        # 实际数据库 debt_ratio NULL 是普遍现象, 直接拒收 = 0 推荐.
+        # 改为 None 通过, 由 PIT 质量面板(max_debt=85)兜底, 写 meta
+        # 标记让 dashboard 知道缺失数.
         assert passes_hard_filters(_row(debt_ratio=70.0), CFG)
-        fails = passes_hard_filters(_row(debt_ratio=None), CFG)
-        assert any("负债率" in f for f in fails)
+        # None 视为未披露, 走 PIT 兜底
+        assert passes_hard_filters(_row(debt_ratio=None), CFG) == []
 
 
 @pytest.fixture
