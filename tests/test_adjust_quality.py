@@ -89,9 +89,35 @@ class TestLoadPanelsAdjust:
         raw = [("600000", d, o, o, o, o, 1e6, 1e7)
                for d, o in zip(dates, [10.0, 7.0])]
         _seed_daily(conn, raw)
-        p = F.load_panels(conn, adjust="")  # 显式不复权
+        p = F.load_panels(conn, adjust="")
         assert list(p["close"]["600000"].values) == [10.0, 7.0]
         conn.close()
+
+
+class TestLoadPanelForCodesQfq:
+    """multifactor_score.load_panel_for_codes 应优先 daily_qfq，缺失回退 daily。"""
+
+    def test_prefers_qfq_and_falls_back(self):
+        from fwsp.multifactor_score import load_panel_for_codes
+        conn = sqlite3.connect(":memory:")
+        init_schema(conn)
+        dates = ["2024-01-02", "2024-01-03"]
+        raw = [("600000", d, o, o, o, o, 1e6, 1e7)
+               for d, o in zip(dates, [10.0, 7.0])]
+        qfq = [("600000", d, o, o, o, o, 1e6, 1e7)
+               for d, o in zip(dates, [10.0, 10.0])]
+        _seed_daily(conn, raw)
+        _seed_qfq(conn, qfq)
+        p = load_panel_for_codes(conn, ["600000"], adjust="qfq")
+        assert list(p["close"]["600000"].values) == [10.0, 10.0]
+
+        conn2 = sqlite3.connect(":memory:")
+        init_schema(conn2)
+        _seed_daily(conn2, raw)  # 仅 daily，无 qfq
+        p2 = load_panel_for_codes(conn2, ["600000"], adjust="qfq")
+        assert list(p2["close"]["600000"].values) == [10.0, 7.0]
+        conn.close()
+        conn2.close()
 
 
 class TestForwardReturnsQfq:

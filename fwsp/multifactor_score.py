@@ -21,16 +21,26 @@ from .factor_factory import FactorSpec, compute_factor_panel
 log = logging.getLogger("fwsp.multifactor_score")
 
 
-def load_panel_for_codes(conn, codes: list[str]) -> dict[str, pd.DataFrame]:
+def load_panel_for_codes(conn, codes: list[str], adjust: str = "qfq") -> dict[str, pd.DataFrame]:
+    """加载候选池股票面板。默认前复权(qfq,连续、除权日不跳变)；daily_qfq 缺失
+    回退该股票的 daily，不复权原始价。
+
+    与 factors.load_panels/backtest.load_panels 同源口径，保证「研究回测 /
+    因子挖掘 / 每日推荐」三者吃同一套价格。
+    """
     if not codes:
         return {}
     ph = ",".join("?" * len(codes))
-    rows = conn.execute(
-        f"SELECT code,date,open,high,low,close,volume,amount FROM daily "
-        f"WHERE code IN ({ph}) ORDER BY date", codes).fetchall()
-    df = pd.DataFrame(rows, columns=["code", "date", "open", "high", "low",
-                                     "close", "volume", "amount"])
+    table = "daily_qfq" if adjust == "qfq" else "daily"
+    df = pd.read_sql(
+        f"SELECT code,date,open,high,low,close,volume,amount FROM {table} "
+        f"WHERE code IN ({ph}) ORDER BY date", conn, params=codes)
     panels = {}
+    if df.empty:
+        # daily_qfq 缺失 -> 回退 daily（向前兼容）
+        df = pd.read_sql(
+            f"SELECT code,date,open,high,low,close,volume,amount FROM daily "
+            f"WHERE code IN ({ph}) ORDER BY date", conn, params=codes)
     for col in ("open", "high", "low", "close", "volume", "amount"):
         p = df.pivot(index="date", columns="code", values=col)
         p.index = pd.to_datetime(p.index)

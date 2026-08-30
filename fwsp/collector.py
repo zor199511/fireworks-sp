@@ -22,7 +22,7 @@ if not hasattr(pd.DataFrame, "append"):
         return pd.concat([self, other], ignore_index=ignore_index)
     pd.DataFrame.append = _df_append
 
-from .config import SPOT_COLS, YJBB_COLS
+from .config import SPOT_COLS, YJBB_COLS, HISTORY_START
 from .db import last_daily_dates, upsert_rows
 
 log = logging.getLogger("fwsp.collector")
@@ -643,6 +643,37 @@ def _refetch_qfq_baostock(conn, codes: list[str], start: str):
         pass
     socket.setdefaulttimeout(old_timeout)
     return done, fail
+
+
+def refetch_qfq_missing(conn, codes_by: str = "universe", start: str | None = None,
+                        workers: int = 4, source: str = "baostock"):
+    """补抓 daily_qfq 中缺失的股票（幂等：仅写入从未抓过的 code）。
+
+    用于修复一次性全量重抓遗漏（如创业板 baostock 限流导致片段未写）。
+    codes_by='universe' 用 stock_list∩spot 活跃股票；'fin' 用 daily 有数据的股票。
+    source='baostock' 单会话串行（受限服务器）；source='akshare' 并发。
+    """
+    if codes_by == "fin":
+        rows = conn.execute(
+            "SELECT DISTINCT code FROM daily ORDER BY code").fetchall()
+    else:
+        rows = conn.execute(
+            "SELECT s.code FROM stock_list s JOIN spot p ON p.code=s.code "
+            "WHERE s.exchange IN ('sh','sz') AND s.is_st=0 "
+            "AND p.price IS NOT NULL AND p.price > 0").fetchall()
+    universe = [r[0] for r in rows]
+    have = {r[0] for r in conn.execute(
+        "SELECT DISTINCT code FROM daily_qfq").fetchall()}
+    missing = [c for c in universe if c not in have]
+    log.info("qfq 补抓: %d 股票缺失 (have=%d/universe=%d)",
+             len(missing), len(have), len(universe))
+    if not missing:
+        return 0, 0
+    _start = start or HISTORY_START
+    if source == "baostock":
+        return _refetch_qfq_baostock(conn, missing, _start)
+    return refetch_qfq_all(conn, missing, _start, workers=workers,
+                           source="akshare")
 
 
 # ------------------------------------------------------------------ index

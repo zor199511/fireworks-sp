@@ -34,12 +34,15 @@ def main():
     ap.add_argument("--qfq-source", choices=["akshare", "baostock"],
                     default="baostock",
                     help="qfq 重抓数据源：baostock(服务器默认,适配EM不通) / akshare(本机)")
+    ap.add_argument("--qfq-resume", action="store_true",
+                    help="补抓 daily_qfq 缺失的股票（幂等），用于修复全量重抓遗漏")
     args = ap.parse_args()
 
     with db.get_conn() as conn:
         db.init_schema(conn)
         if args.refetch_qfq:
-            done, fail = pipeline.refetch_qfq(conn, source=args.qfq_source)
+            done, fail = pipeline.refetch_qfq(conn, source=args.qfq_source,
+                                              resume=args.qfq_resume)
             log.info("qfq 重抓完成: ok=%d fail=%d", done, fail)
             return
         pipeline.update_all(conn, full=args.full, skip_daily=args.skip_daily,
