@@ -127,7 +127,12 @@ def main():
             "is_total_return": round(r_is["total_return"], 4),
             "is_sharpe": round(r_is["sharpe"], 3),
         })
-    print("[saved] 选中因子与 OOS 摘要已写入 meta")
+        # 同时晋升到 active_factors, 让 screener 当日就能用上新因子
+        # (消除之前手动 set_active_factors 同步服务器, 避免 active_sets 重复行)
+        from fwsp.db import set_active_factors
+        set_active_factors(conn, selected, oos=r_oos["sharpe"],
+                           source="research_mine")
+    print("[saved] 选中因子与 OOS 摘要已写入 meta; active_factors 已晋升")
 
 
 if __name__ == "__main__":

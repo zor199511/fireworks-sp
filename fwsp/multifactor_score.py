@@ -31,7 +31,8 @@ def load_panel_for_codes(conn, codes: list[str], adjust: str = "qfq") -> dict[st
     if not codes:
         return {}
     ph = ",".join("?" * len(codes))
-    table = "daily_qfq" if adjust == "qfq" else "daily"
+    from .db import validate_table_name
+    table = validate_table_name("daily_qfq" if adjust == "qfq" else "daily")
     df = pd.read_sql(
         f"SELECT code,date,open,high,low,close,volume,amount FROM {table} "
         f"WHERE code IN ({ph}) ORDER BY date", conn, params=codes)

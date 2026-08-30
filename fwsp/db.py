@@ -228,6 +228,24 @@ def set_active_factors(conn, factors: list[str], run_at: str | None = None,
     return run_at
 
 
+# 子代理 1 critical-1: f-string 拼表名是反模式(实际有白名单常量保护),
+# 这里统一一个白名单校验函数, 任何拼表名 SQL 都先过这一关.
+_ALLOWED_TABLES = frozenset({
+    "stock_list", "spot", "fin_q", "daily", "daily_qfq", "index_daily",
+    "meta", "recommendations", "active_sets", "factor_library",
+    "factor_eval", "evolution_log", "index_cons",
+})
+
+
+def validate_table_name(name: str) -> str:
+    """白名单校验表名, 用于 f-string 拼 SQL 前. 子代理 1 critical #1 防御."""
+    if name not in _ALLOWED_TABLES:
+        raise ValueError(
+            f"refused: table '{name}' not in whitelist "
+            f"(allowed: {sorted(_ALLOWED_TABLES)})")
+    return name
+
+
 def load_daily(conn, code: str) -> "list[tuple]":
     return conn.execute(
         "SELECT date,open,high,low,close,volume,amount FROM daily WHERE code=? ORDER BY date",

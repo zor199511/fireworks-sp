@@ -11,11 +11,12 @@ log = logging.getLogger("fwsp.factors")
 HORIZONS = (5, 10, 20)
 
 
-def load_panels(conn, adjust: str = "qfq"):
+def load_panels(conn, adjust: str | None = "qfq"):
     """加载价格面板。adjust='qfq'(默认) 用前复权价(连续、除权日不跳变)；
     adjust='' 用不复权原始价。daily_qfq 表缺失/为空时回退 daily，保证向前兼容。
     """
-    table = "daily_qfq" if adjust == "qfq" else "daily"
+    from .db import validate_table_name
+    table = validate_table_name("daily_qfq" if adjust == "qfq" else "daily")
     try:
         rows = conn.execute(
             f"SELECT code,date,open,high,low,close,volume,amount FROM {table} "
@@ -146,9 +147,11 @@ def code_first_last_dates(conn, table: str = "daily") -> pd.DataFrame:
     出现的 date(若 collector 已隐式剔除退市股,通常 = 数据库最新交易日)。
     返回 DataFrame[code, first, last]。
     """
+    from .db import validate_table_name
+    safe_table = validate_table_name(table)
     rows = conn.execute(
         f"SELECT code, MIN(date) AS first, MAX(date) AS last "
-        f"FROM {table} GROUP BY code").fetchall()
+        f"FROM {safe_table} GROUP BY code").fetchall()
     out = pd.DataFrame(rows, columns=["code", "first", "last"])
     out["first"] = pd.to_datetime(out["first"], errors="coerce")
     out["last"] = pd.to_datetime(out["last"], errors="coerce")

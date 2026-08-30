@@ -19,7 +19,8 @@ def load_panels(conn, adjust: str = "qfq") -> dict[str, pd.DataFrame]:
 
     与 factors.load_panels 同源口径，确保实盘回测与因子挖掘吃同一套价格。
     """
-    table = "daily_qfq" if adjust == "qfq" else "daily"
+    from .db import validate_table_name
+    table = validate_table_name("daily_qfq" if adjust == "qfq" else "daily")
     try:
         rows = conn.execute(
             f"SELECT code,date,open,high,low,close,volume,amount FROM {table} "
