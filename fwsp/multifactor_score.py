@@ -122,9 +122,15 @@ def multifactor_scores(conn, codes: list[str], as_of: str | None = None
         latest[s.id] = row
 
     mat = pd.DataFrame({s.id: latest[s.id] for s in specs})
-    # 截面 zscore（候选池内标准化）；缺失用 0
-    z = mat.sub(mat.mean(axis=1), axis=0).div(mat.std(axis=1).replace(0, np.nan),
-                                             axis=0).fillna(0.0)
+    # 截面 zscore（候选池内标准化）；但候选池截面只有 1 行(当日)或某因子
+    # 常值时，rowstd=0，除0 会把所有原始分值归零（回归 bug）。活跃因子本身
+    # 多以 zscore/标准化形式存（如 mr_zscore_rev__w120），因此在 1 行或 std=0
+    # 时直接沿用原始值×权重，不重复标准化；多行且有波动时才截面 zscore。
+    row_std = mat.std(axis=1).replace(0, np.nan)
+    if row_std.notna().all() and len(mat) > 1:
+        z = mat.sub(mat.mean(axis=1), axis=0).div(row_std, axis=0).fillna(0.0)
+    else:
+        z = mat.fillna(0.0)
 
     score = {}
     reasons = {}
