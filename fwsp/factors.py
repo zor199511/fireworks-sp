@@ -139,6 +139,56 @@ def forward_returns(panels, horizons=HORIZONS):
     return out
 
 
+def code_first_last_dates(conn, table: str = "daily") -> pd.DataFrame:
+    """每只股票在日线表的首/末交易日(用作 PIT universe 上市/退市边界)。
+
+    上市日=该 code 在日线表首次出现的 date;退市日=该 code 在日线表最后一次
+    出现的 date(若 collector 已隐式剔除退市股,通常 = 数据库最新交易日)。
+    返回 DataFrame[code, first, last]。
+    """
+    rows = conn.execute(
+        f"SELECT code, MIN(date) AS first, MAX(date) AS last "
+        f"FROM {table} GROUP BY code").fetchall()
+    out = pd.DataFrame(rows, columns=["code", "first", "last"])
+    out["first"] = pd.to_datetime(out["first"], errors="coerce")
+    out["last"] = pd.to_datetime(out["last"], errors="coerce")
+    return out.dropna(subset=["first", "last"])
+
+
+def _pit_boundaries(piv: pd.DataFrame, code_fl: pd.DataFrame) -> pd.DataFrame:
+    """在 PIT 质量面板基础上叠加『上市前/退市后剔除』。
+
+    code_fl: code_first_last_dates 返回的 DataFrame。date < code 首日 或
+    date > code 末日 → False(不参与 IC/回测)。消除『新股未上市已纳入』与
+    『已退市但 daily 仍占位(停牌股)』两类幸存者偏差。
+    """
+    if piv.empty or code_fl.empty:
+        return piv
+    cols = list(piv.columns)
+    fl = code_fl.set_index("code")
+    keep_codes = [c for c in cols if c in fl.index]
+    if not keep_codes:
+        return piv.iloc[:, :0]
+    # 向量化边界:dates (884,) × keep_codes (n) 矩阵
+    f_series = fl.loc[keep_codes, "first"]  # Index=keep_codes
+    l_series = fl.loc[keep_codes, "last"]
+    date_idx = piv.index
+    # 直接用 numpy 数组做比较,避免 DataFrame 切片赋值的多义性
+    f_arr = np.tile(f_series.values[None, :], (len(date_idx), 1))
+    l_arr = np.tile(l_series.values[None, :], (len(date_idx), 1))
+    d_arr = np.tile(date_idx.values[:, None], (1, len(keep_codes)))
+    in_window = pd.DataFrame(
+        (f_arr <= d_arr) & (l_arr >= d_arr),
+        index=date_idx, columns=keep_codes)
+    out = piv.copy()
+    out.loc[:, keep_codes] = out.loc[:, keep_codes] & in_window.astype(bool)
+    # 不在 keep_codes 的 code 直接 False(理论上 panels 不含)
+    drop_codes = [c for c in cols if c not in keep_codes]
+    if drop_codes:
+        out.loc[:, drop_codes] = False
+    return out
+
+
 def quality_panel(conn, dates, min_circ_mv=3e9, min_roe=0.0,
                   min_profit_yoy=None, max_debt_ratio=85.0, exclude_st=True):
     """随时间变化的质量门槛，返回 DataFrame(bool, dates x codes)。
@@ -149,13 +199,21 @@ def quality_panel(conn, dates, min_circ_mv=3e9, min_roe=0.0,
     codes = pd.read_sql("SELECT code,is_st FROM stock_list", conn)
     spot = pd.read_sql("SELECT code,circ_mv FROM spot", conn)
     fin = pd.read_sql(
-        "SELECT code,period,as_of,roe,profit_yoy,debt_ratio FROM fin_q "
-        "WHERE as_of IS NOT NULL", conn)
+        "SELECT code,period,as_of,roe,profit_yoy,debt_ratio FROM fin_q", conn)
     st_codes = set(codes.loc[codes["is_st"].fillna(0) == 1, "code"])
     circ = spot.set_index("code")["circ_mv"].fillna(0)
 
     fin = fin.copy()
+    # period 可能是 "20260331" 或 "2026-03-31"（旧/新库格式不同）
+    fin["period"] = pd.to_datetime(
+        fin["period"], format="mixed", errors="coerce")
     fin["as_of"] = pd.to_datetime(fin["as_of"], errors="coerce")
+    # as_of 缺失时回退 period（报告期末+30d，财报披露日的保守近似）。
+    # 旧库 fin_q.as_of 多为 NULL（backfill_fundamentals 未跑过），没有
+    # 这个 fallback → 整张 PIT 面板全空 → 幸存者偏差修复形同虚设。
+    missing = fin["as_of"].isna() & fin["period"].notna()
+    fin.loc[missing, "as_of"] = fin.loc[missing, "period"] + pd.Timedelta(days=30)
+    fin = fin.dropna(subset=["as_of"])
     qual = pd.Series(True, index=fin.index)
     qual &= ~fin["code"].isin(st_codes)
     qual &= fin["code"].map(circ).fillna(0) >= min_circ_mv
@@ -178,4 +236,17 @@ def quality_panel(conn, dates, min_circ_mv=3e9, min_roe=0.0,
     piv = piv.reindex(dates).ffill()
     # 缺失 (as_of,code) 由下游 fillna(False) 处理；此处显式转纯 numpy bool，
     # 确保布尔契约且规避 Arrow 索引问题（无 0.111/0.5 等分数）。
-    return piv.fillna(False).astype(bool)
+    piv = piv.fillna(False).astype(bool)
+
+    # PIT universe 边界：上市前/退市后剔除
+    # 退市股通常 collector 已隐式剔除(last_date = 数据库最新日),此时此
+    # 步骤为 no-op;但对于停牌股(daily 持续占位至末日)与新股(daily 从
+    # 上市日起记录)能正确划定每只 code 在每日的 universe 资格,彻底消除
+    # 『未上市已纳入』与『已退市但仍占位』两类幸存者偏差。
+    try:
+        code_fl = code_first_last_dates(conn)
+        piv = _pit_boundaries(piv, code_fl)
+    except Exception as e:  # noqa: BLE001
+        # PIT 边界失败不应阻塞质量面板(基本面前向填充仍有效)
+        log.warning("PIT universe boundaries failed: %s", e)
+    return piv
