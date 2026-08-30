@@ -45,7 +45,7 @@ def check_recommend_dryrun():
     try:
         # persist=False：干跑推荐主链路但不写库（避免 preflight 副作用）
         top = screener.run_screen(top_n=3, persist=False)
-        names = [f"{r['code']}({r.get('score', 0):.0f})" for r in top]
+        names = [f"{r['code']}({r.get('score', 0):.1f})" for r in top]
         ok = len(top) > 0
         record("recommend_dryrun", ok,
                ", ".join(names) if ok else "no candidates today")
