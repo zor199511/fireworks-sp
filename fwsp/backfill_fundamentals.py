@@ -1,6 +1,10 @@
 import logging
+import sys
 import time
 from datetime import date, datetime
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import akshare as ak
 import pandas as pd
@@ -17,9 +21,12 @@ QUARTERS = ("0331", "0630", "0930", "1231")
 
 
 def ensure_as_of(conn):
-    conn.execute("ALTER TABLE fin_q ADD COLUMN as_of TEXT")
-    conn.commit()
-    log.info("已确保 fin_q.as_of 列存在")
+    try:
+        conn.execute("ALTER TABLE fin_q ADD COLUMN as_of TEXT")
+        conn.commit()
+        log.info("已确保 fin_q.as_of 列存在")
+    except Exception:
+        pass  # 列已存在，幂等
 
 
 def periods(start_year=2023):

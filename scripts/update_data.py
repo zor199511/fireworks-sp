@@ -36,6 +36,11 @@ def main():
                     help="qfq 重抓数据源：baostock(服务器默认,适配EM不通) / akshare(本机)")
     ap.add_argument("--qfq-resume", action="store_true",
                     help="补抓 daily_qfq 缺失的股票（幂等），用于修复全量重抓遗漏")
+    ap.add_argument("--backfill-fin", action="store_true",
+                    help="回补 fin_q.as_of 财报披露日（akshare stock_yjbb_em，"
+                         "本机约 5-10 分钟，akshare EM 受限服务器不可用）")
+    ap.add_argument("--backfill-index", action="store_true",
+                    help="拉取宽基指数当前成分股快照到 index_cons 表")
     args = ap.parse_args()
 
     with db.get_conn() as conn:
@@ -44,6 +49,16 @@ def main():
             done, fail = pipeline.refetch_qfq(conn, source=args.qfq_source,
                                               resume=args.qfq_resume)
             log.info("qfq 重抓完成: ok=%d fail=%d", done, fail)
+            return
+        if args.backfill_fin:
+            from fwsp.backfill_fundamentals import backfill as bf
+            bf(conn, start_year=2023)
+            log.info("fin_q.as_of 回补完成")
+            return
+        if args.backfill_index:
+            from scripts.backfill_index_cons import backfill as bic
+            bic()
+            log.info("指数成分股快照回补完成")
             return
         pipeline.update_all(conn, full=args.full, skip_daily=args.skip_daily,
                             source=args.source)

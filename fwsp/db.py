@@ -70,6 +70,16 @@ CREATE TABLE IF NOT EXISTS active_sets (
     oos REAL,
     source TEXT
 );
+CREATE TABLE IF NOT EXISTS index_cons (
+    index_code TEXT,
+    code TEXT,
+    name TEXT,
+    industry TEXT,
+    snapshot_date TEXT,
+    PRIMARY KEY (index_code, code, snapshot_date)
+);
+CREATE INDEX IF NOT EXISTS idx_index_cons_code ON index_cons(code);
+CREATE INDEX IF NOT EXISTS idx_index_cons_date ON index_cons(snapshot_date);
 CREATE TABLE IF NOT EXISTS factor_library (
     code TEXT PRIMARY KEY,
     category TEXT,

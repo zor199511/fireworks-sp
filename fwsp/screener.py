@@ -14,6 +14,22 @@ RECO_COLS = ["run_date", "rank", "code", "name", "industry", "score",
               "price", "reasons", "metrics", "factor_set_id"]
 
 
+def _in_index_tags(conn, code: str) -> str:
+    """查询某 code 当前所在的宽基指数(取最近 snapshot_date)。
+
+    返回 '沪深300,创业板指' 形式,空字符串表示不在任何快照指数内。
+    多指数在 index_cons 中分多行,以 (code, snapshot_date) 区分。
+    """
+    rows = conn.execute(
+        "SELECT DISTINCT index_code FROM index_cons "
+        "WHERE code=? AND snapshot_date = ("
+        "  SELECT MAX(snapshot_date) FROM index_cons WHERE code=?)",
+        (code, code)).fetchall()
+    names = {"000300": "沪深300", "399905": "中证500", "399006": "创业板指",
+             "399001": "深证成指"}
+    return ",".join(names.get(r[0], r[0]) for r in rows)
+
+
 # ------------------------------------------------------------ hard filters
 
 def hard_filter_rows(conn) -> pd.DataFrame:
