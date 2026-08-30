@@ -85,10 +85,21 @@ def active_specs(conn) -> tuple[list[FactorSpec], dict[str, float]]:
             lib_map[fid][3], lib_map[fid][4]
         specs.append(FactorSpec(fid, cat, expr,
                                 json.loads(pj) if pj else {}, desc or fid))
+        # 子代理 2 轮 R2-数学4: 旧版用 abs(net_ir) 忽略方向, IC 极负的反转
+        # 因子(icir<0, 如 mr_zscore_rev__w120)被算成 weight=|icir|>0 当正权入组合
+        # → 反向持仓亏损. 修: sign(icir)*|icir| 保留方向, NaN 时回退 |is_icir|.
+        def _signed_w(eval_row, idx):
+            v = eval_row[idx] if eval_row else None
+            if v is None or (isinstance(v, float) and np.isnan(v)):
+                return None
+            a = abs(v)
+            return (1.0 if v > 0 else -1.0) * a if v != 0 else 0.0
         ev = eval_map.get(fid)
-        w = abs(ev[2]) if ev and ev[2] is not None and not (isinstance(ev[2], float)
-                 and np.isnan(ev[2])) else (abs(ev[1]) if ev and ev[1] is not None
-                 and not (isinstance(ev[1], float) and np.isnan(ev[1])) else 1.0)
+        w = _signed_w(ev, 2)  # net_ir
+        if w is None:
+            w = _signed_w(ev, 1)  # is_icir fallback
+        if w is None:
+            w = 1.0  # 完全无评估时等权(保守, 不假定方向)
         weights[fid] = w
     return specs, weights
 

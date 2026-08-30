@@ -1,0 +1,16 @@
+[Unit]
+Description=fireworks-sp daily pipeline run
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=zor
+WorkingDirectory=/home/zor/fireworks-sp
+ExecStart=/home/zor/fireworks-sp/.venv/bin/python -m fwsp.pipeline daily_run
+StandardOutput=append:/home/zor/fireworks-sp/logs/daily_run.log
+StandardError=append:/home/zor/fireworks-sp/logs/daily_run.log
+TimeoutStartSec=900
+
+[Install]
+WantedBy=multi-user.target

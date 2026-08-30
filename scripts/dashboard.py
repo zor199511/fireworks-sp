@@ -1,6 +1,6 @@
 import json
 import sys
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -12,10 +12,11 @@ import streamlit as st
 st.set_page_config(page_title="fireworks-sp", page_icon="🎆",
                    layout="wide")
 
+from fwsp.config import LOG_DIR  # noqa: E402
 from ui import (inject_css, sidebar_nav, section_title, metric_row,  # noqa: E402
                 card_container, badge, alert_banner, reason_badge,
                 candle_chart, ratio_bar, pareto_scatter, timeline,
-                equity_curve, factor_bar, freq_bar)
+                equity_curve, factor_bar, freq_bar, _echarts)  # noqa: E402
 inject_css()
 
 from fwsp.backtest import run_backtest  # noqa: E402
@@ -334,13 +335,54 @@ elif page == "多因子策略":
             st.error(f"实时推荐计算失败：{e}")
 
     if c2.button("重新挖掘因子(约5分钟)"):
-        with st.spinner("贪心挖掘中，请勿关闭…"):
-            import subprocess, sys
-            subprocess.run([sys.executable, "scripts/factor_mine.py"],
-                           cwd=str(Path(__file__).resolve().parent.parent),
-                           check=True)
-            st.cache_data.clear()
-        st.success("挖掘完成，已更新 meta。刷新页面查看。")
+        # 子代理 2 轮 R2-性能5: subprocess.run 阻塞主线程, 多用户死锁.
+        # 子代理 2 轮 R2-并发2: 多用户/重放无去重, 跑 2 个 factor_mine 互踩.
+        # 改: Popen 后台跑 + st.session_state 锁 + 进度条 + 15min timeout.
+        import subprocess
+        import sys
+        from pathlib import Path as _P
+        st.session_state.setdefault("factor_mine_running", False)
+        st.session_state.setdefault("factor_mine_pid", None)
+        if st.session_state["factor_mine_running"]:
+            pid = st.session_state["factor_mine_pid"]
+            # 检查进程是否还活着
+            import os
+            try:
+                os.kill(pid, 0)
+                st.warning(f"factor_mine 正在跑 (PID={pid}), 请等待完成或 kill 旧进程")
+            except OSError:
+                st.session_state["factor_mine_running"] = False
+                st.session_state["factor_mine_pid"] = None
+                st.rerun()
+        else:
+            log_path = LOG_DIR / f"factor_mine_{datetime.now():%Y%m%d_%H%M%S}.log"
+            log_f = open(log_path, "w")
+            proc = subprocess.Popen(
+                [sys.executable, "scripts/factor_mine.py"],
+                cwd=str(_P(__file__).resolve().parent.parent),
+                stdout=log_f, stderr=subprocess.STDOUT, start_new_session=True)
+            st.session_state["factor_mine_running"] = True
+            st.session_state["factor_mine_pid"] = proc.pid
+            st.session_state["factor_mine_log"] = str(log_path)
+            st.info(f"factor_mine 已启动 PID={proc.pid}, 日志 {log_path}, "
+                    f"可手动 `tail -f` 查看进度. 15min 后自动判超时.")
+            # 后台等待线程检查完成(避免主线程阻塞)
+            import threading
+            def _watch():
+                try:
+                    proc.wait(timeout=900)  # 15min hard timeout
+                    if proc.returncode == 0:
+                        st.session_state["factor_mine_status"] = "ok"
+                    else:
+                        st.session_state["factor_mine_status"] = f"FAIL rc={proc.returncode}"
+                except subprocess.TimeoutExpired:
+                    proc.kill()
+                    st.session_state["factor_mine_status"] = "TIMEOUT killed"
+                finally:
+                    st.session_state["factor_mine_running"] = False
+                    log_f.close()
+                    st.cache_data.clear()
+            threading.Thread(target=_watch, daemon=True).start()
 
     st.divider()
     st.subheader("参数化多因子回测")

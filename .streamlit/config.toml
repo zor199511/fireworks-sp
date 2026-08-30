@@ -8,3 +8,12 @@ font = "sans-serif"
 
 [server]
 headless = true
+# 子代理 2 轮 R2-并发2/R2-韧性4: dashboard 安全加固
+# XSRF 防护开, CORS 限制同源, 文件上传限制 1MB
+enableXsrfProtection = true
+enableCORS = false
+maxUploadSize = 1
+
+[browser]
+# 不自动打开浏览器(无人值守服务)
+gatherUsageStats = false

@@ -97,7 +97,8 @@ def walk_forward_backtest(zscores, ics, close, opn, low, quality, highs=None,
                           start="2024-06-01", end=None, top_n=10,
                           horizon=10, stop_pct=-8.0, train_days=252,
                           capital=1_000_000.0, selected=None,
-                          rebal='W', trail=None, profit_pct=None):
+                          rebal='W', trail=None,
+                          profit_pct: float | None = 8.0):  # 子代理 2 轮 R2-数学1: 对齐 run_backtest 默认 8.0, 两套回测口径一致
     end = end or str(date.today())
     zsel = zscores if selected is None else {k: v for k, v in zscores.items() if k in selected}
 
@@ -221,24 +222,34 @@ def mine_factors(factors, close, opn, low, fwd, quality, qpanel=None, highs=None
     quality: 静态质量集（用于 IC 计算）；qpanel: 时间变化质量面板（用于回测）。
     highs/low: 日内高低面板（统一执行层用于止盈/止损）。
     返回 (selected_list, report_df)。
+    子代理 2 轮 R2-性能2: walk_forward_backtest 重复调用, 缓存 selected tuple → sharpe.
     """
     z, ic = precompute(factors, fwd, quality, horizon)
     backtest_quality = qpanel if qpanel is not None else quality
     candidates = list(factors.keys())
-    selected = []
+    selected: list[str] = []
     cur_best = -1e9
     report = []
+    # 子代理 2 轮 R2-性能2: cache (frozen selected_tuple) -> sharpe
+    # 同一 selected 重复计算(贪心内部 step N 末尾的 selected 可能 = step N+1 开头)直接命中
+    _wf_cache: dict[tuple, float] = {}
+    def _wf_cached(sel: list[str]) -> float:
+        key = tuple(sel)
+        if key in _wf_cache:
+            return _wf_cache[key]
+        r = walk_forward_backtest(z, ic, close, opn, low, backtest_quality,
+                                  highs=highs, start=start, top_n=top_n,
+                                  horizon=horizon, selected=sel)
+        _wf_cache[key] = r["sharpe"]
+        return r["sharpe"]
     while len(selected) < max_factors:
         best_sharpe, best_name = -1e9, None
         for name in candidates:
             if name in selected:
                 continue
-            r = walk_forward_backtest(z, ic, close, opn, low, backtest_quality,
-                                      highs=highs, start=start, top_n=top_n,
-                                      horizon=horizon,
-                                      selected=selected + [name])
-            if r["sharpe"] > best_sharpe:
-                best_sharpe, best_name = r["sharpe"], name
+            s = _wf_cached(selected + [name])
+            if s > best_sharpe:
+                best_sharpe, best_name = s, name
         if best_name is None or best_sharpe <= cur_best:
             break
         selected.append(best_name)

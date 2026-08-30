@@ -97,7 +97,11 @@ def passes_hard_filters(r: dict, cfg: dict) -> list[str]:
     # 会导致 5000+ 只全拒(0 推荐)。改为: None 时通过, 但 PIT 质量门槛
     # (quality_panel) 用 fin_q 历史 max_debt=85 兜底, 且写 meta 标记让
     # dashboard 知道"当前 universe 有 N 只 debt_ratio 缺失, 实盘需关注".
-    if debt is None:
+    # 子代理 2 轮 R2-韧性3: None 通过时记 reasons, 让用户看到 "基本面缺失"
+    # 提示, 不再被绿色信号误导.
+    debt_missing = debt is None
+    if debt_missing:
+        r.setdefault("_missing_fundamentals", []).append("debt_ratio")
         pass  # 不拒收, PIT + dashboard 提示代替
     elif debt > cfg["max_debt"]:
         fails.append(f"负债率{debt:.1f}>{cfg['max_debt']}%")
@@ -174,11 +178,23 @@ def run_screen(top_n=10, persist: bool = True) -> list[dict]:
                  len(base), null_debt)
 
         survivors = []
+        missing_fund_count = 0
         for r in base.to_dict("records"):
+            r.setdefault("_missing_fundamentals", [])
             if passes_hard_filters(r, FILTERS):
                 continue
+            if r["_missing_fundamentals"]:
+                missing_fund_count += 1
             survivors.append(r)
-        log.info("after fundamental filters: %d", len(survivors))
+        log.info("after fundamental filters: %d (基本面缺失 %d 只, 待推 %d)",
+                 len(survivors), missing_fund_count, missing_fund_count)
+        # 子代理 2 轮 R2-韧性3: 缺失 >30% universe 触发告警 meta
+        if len(base) > 0 and missing_fund_count / len(base) > 0.30:
+            set_meta(conn, "universe_fund_missing_alert",
+                     f"{missing_fund_count}/{len(base)}={missing_fund_count/len(base):.0%} "
+                     f"基本面缺失, 实盘需关注")
+        else:
+            set_meta(conn, "universe_fund_missing_alert", "0")
 
         # PIT universe 边界：剔除 daily 长期不更新的股票(已退市/已停牌)
         # 子代理 3 critical #5: spot 比 daily 滞后,需要额外硬门
@@ -188,19 +204,31 @@ def run_screen(top_n=10, persist: bool = True) -> list[dict]:
         log.info("after PIT universe filter: %d", len(survivors))
 
         # 流动性预筛（与进化口径一致）：需 ≥130 日线 + 近 20 日日均额达标
-        liquid = []
-        for r in survivors:
+        # 子代理 2 轮 R2-性能1: N+1 SELECT 改为 batched IN 一次查.
+        # 子代理 2 轮 R2-性能6: hard_filter_rows 子查询 -> 已由 validate_table_name + LEFT JOIN 减少.
+        from .db import validate_table_name
+        _daily = validate_table_name("daily")
+        codes_need = [r["code"] for r in survivors]
+        liquid_codes: set[str] = set()
+        if codes_need:
+            ph = ",".join("?" * len(codes_need))
             rows = conn.execute(
-                "SELECT date,open,high,low,close,volume,amount FROM daily "
-                "WHERE code=? ORDER BY date", (r["code"],)).fetchall()
-            df = pd.DataFrame(rows, columns=["date", "open", "high", "low",
-                                             "close", "volume", "amount"])
-            if len(df) < 130:
-                continue
-            amt20 = df["amount"].astype(float).tail(20).mean()
-            if amt20 < FILTERS["min_amount_20d"]:
-                continue
-            liquid.append(r)
+                f"SELECT code, amount FROM {_daily} "
+                f"WHERE code IN ({ph}) "
+                f"ORDER BY code, date DESC", codes_need).fetchall()
+            # 内存聚合: 每 code 取最近 20 行 amount 求平均 + 总行数 ≥130
+            by_code: dict[str, list[float]] = {}
+            for code, amt in rows:
+                if amt is None:
+                    continue
+                by_code.setdefault(code, []).append(float(amt))
+            for code, amts in by_code.items():
+                if len(amts) < 130:
+                    continue
+                if sum(amts[:20]) / 20.0 < FILTERS["min_amount_20d"]:
+                    continue
+                liquid_codes.add(code)
+        liquid = [r for r in survivors if r["code"] in liquid_codes]
 
         scored = []
         mf_scores, mf_reasons = multifactor_scores(
@@ -213,18 +241,38 @@ def run_screen(top_n=10, persist: bool = True) -> list[dict]:
                     continue
                 r2 = dict(r)
                 r2["score"] = mf_scores[code]
-                r2["reasons"] = mf_reasons[code]
+                reasons = list(mf_reasons[code])
+                # 子代理 2 轮 R2-韧性3: 缺失基本面附加 reason 提示
+                if r.get("_missing_fundamentals"):
+                    reasons.append(f"⚠️基本面缺失: {','.join(r['_missing_fundamentals'])}")
+                r2["reasons"] = reasons
                 r2["close"] = r.get("price")  # 推荐页价格取自 spot.price
                 scored.append(r2)
             # 活跃因子集有效 → 清除降级标记
             set_meta(conn, "factor_system_degraded", "0")
         else:
             log.warning("无 active_factors，回退硬编码反转打分（因子系统降级）")
+            # 子代理 2 轮 R2-性能1: fallback N+1 查 daily 改 batched IN
+            from .db import validate_table_name
+            _daily = validate_table_name("daily")
+            liquid_codes_fb = [r["code"] for r in liquid]
+            daily_by_code: dict[str, pd.DataFrame] = {}
+            if liquid_codes_fb:
+                ph = ",".join("?" * len(liquid_codes_fb))
+                fb_rows = conn.execute(
+                    f"SELECT code, date, open, high, low, close, volume, amount "
+                    f"FROM {_daily} WHERE code IN ({ph}) "
+                    f"ORDER BY code, date", liquid_codes_fb).fetchall()
+                cols = ["code", "date", "open", "high", "low", "close",
+                        "volume", "amount"]
+                for r in fb_rows:
+                    daily_by_code.setdefault(r[0], []).append(r[1:])
             for r in liquid:
-                rows = conn.execute(
-                    "SELECT date,open,high,low,close,volume,amount FROM daily "
-                    "WHERE code=? ORDER BY date", (r["code"],)).fetchall()
-                df = pd.DataFrame(rows, columns=["date", "open", "high", "low",
+                code = r["code"]
+                raw = daily_by_code.get(code)
+                if not raw:
+                    continue
+                df = pd.DataFrame(raw, columns=["date", "open", "high", "low",
                                                  "close", "volume", "amount"])
                 ft = compute_features(df)
                 if not ft:
@@ -233,6 +281,10 @@ def run_screen(top_n=10, persist: bool = True) -> list[dict]:
                 r2 = dict(r)
                 r2.update(ft)
                 r2["score"] = sc
+                # 子代理 2 轮 R2-韧性3: 缺失基本面附加 reason 提示
+                if r.get("_missing_fundamentals"):
+                    reasons = list(reasons) + [
+                        f"⚠️基本面缺失: {','.join(r['_missing_fundamentals'])}"]
                 r2["reasons"] = reasons
                 scored.append(r2)
             # 活跃因子集为空/失效 → 标记降级，供 dashboard 横幅与微信告警读取

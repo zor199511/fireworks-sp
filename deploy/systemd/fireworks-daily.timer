@@ -1,0 +1,11 @@
+[Unit]
+Description=fireworks-sp daily pipeline timer (Mon-Fri 17:30)
+Requires=fireworks-daily.service
+
+[Timer]
+OnCalendar=Mon..Fri 17:30:00
+Persistent=true
+AccuracySec=10s
+
+[Install]
+WantedBy=timers.target

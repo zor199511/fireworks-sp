@@ -1,8 +1,11 @@
 import json
+import logging
 import sqlite3
 from contextlib import contextmanager
 
 from . import config
+
+log = logging.getLogger("fwsp.db")
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS stock_list (
@@ -118,11 +121,43 @@ def get_conn(db_path=None):
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA synchronous=NORMAL")
     conn.execute("PRAGMA busy_timeout=5000")  # 防并发 timer/查询重叠时 database is locked
+    # 子代理 2 轮 R2-并发3: wal_autocheckpoint 调优, 避免长事务 checkpoint 阻塞
+    conn.execute("PRAGMA wal_autocheckpoint=10000")
+    # cache_size 默认 ~2MB 太小, 大查询频繁 -wal 几 GB 占盘
+    conn.execute("PRAGMA cache_size=-64000")  # 64MB
     try:
         yield conn
         conn.commit()
     finally:
         conn.close()
+
+
+# 子代理 2 轮 R2-运维3: 用 PRAGMA user_version 显式管理 schema 版本
+# 起始版本=2 (在原 schema + 上一轮索引迁移之上)
+# 升级时: 在 _MIGRATIONS 列表中加 (version, label, fn) 元组, 升级 fn 必须幂等
+CURRENT_SCHEMA_VERSION = 3
+_MIGRATIONS = [
+    (1, "initial_schema", lambda _c: None),  # 占位, 旧库已有
+    (2, "add_indexes_and_fin_q_as_of", lambda _c: None),  # 已通过 ALTER 隐式迁移
+    # 后续加: (3, "xxx", lambda c: c.execute("...")),
+]
+
+
+def _migrate(conn):
+    """从 PRAGMA user_version 升级到 CURRENT_SCHEMA_VERSION, 逐个跑 _MIGRATIONS."""
+    current = conn.execute("PRAGMA user_version").fetchone()[0]
+    for ver, label, fn in _MIGRATIONS:
+        if current >= ver:
+            continue
+        log.info("schema migrate: %s → v%d", label, ver)
+        fn(conn)
+        conn.execute(f"PRAGMA user_version = {ver}")
+        conn.commit()
+    if current < CURRENT_SCHEMA_VERSION:
+        # 即便 _MIGRATIONS 列表与 CURRENT_SCHEMA_VERSION 不一致, 仍 bump 到底
+        conn.execute(f"PRAGMA user_version = {CURRENT_SCHEMA_VERSION}")
+        conn.commit()
+    set_meta(conn, "schema_version", str(CURRENT_SCHEMA_VERSION))
 
 
 def init_schema(conn):
@@ -144,6 +179,8 @@ def init_schema(conn):
         conn.execute("ALTER TABLE fin_q ADD COLUMN as_of TEXT")
     except sqlite3.OperationalError:
         pass
+    # 子代理 2 轮 R2-运维3: 显式 schema 版本号 + 迁移日志
+    _migrate(conn)
 
 
 def upsert_rows(conn, table: str, cols: list[str], rows: list[tuple]):
@@ -219,12 +256,20 @@ def set_active_factors(conn, factors: list[str], run_at: str | None = None,
     """唯一写入者：写 active_sets + 镜像 meta.active_factors + 同步 selected。
 
     自动进化与衰减降级都只走这里，保证 meta / factor_eval / 进化日志三处一致。
+    子代理 2 轮 R2-并发1: 三步非事务原子, 跨进程并发写会留不一致.
+    修: 跨进程 fcntl 文件锁(其他进程持锁时此调用抛 RuntimeError 跳过).
+    sqlite 自身在 with get_conn 退出时 commit, 这里三步在同一事务里.
     """
+    from .lock import file_lock, LOCK_ACTIVE
     import datetime
-    run_at = run_at or datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    write_active_set(conn, run_at, factors, oos, source)
-    set_meta(conn, "active_factors", json.dumps(list(factors), ensure_ascii=False))
-    _sync_selected(conn, factors)
+    with file_lock(LOCK_ACTIVE, op=f"set_active_factors({source})") as got:
+        if not got:
+            raise RuntimeError(
+                f"set_active_factors({source}) 锁被其他进程持有, 已跳过本次写入")
+        run_at = run_at or datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        write_active_set(conn, run_at, factors, oos, source)
+        set_meta(conn, "active_factors", json.dumps(list(factors), ensure_ascii=False))
+        _sync_selected(conn, factors)
     return run_at
 
 

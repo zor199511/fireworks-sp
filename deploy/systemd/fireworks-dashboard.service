@@ -1,0 +1,18 @@
+[Unit]
+Description=fireworks-sp dashboard (Streamlit 8501)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# 改为部署用户, e.g. zor
+User=zor
+WorkingDirectory=/home/zor/fireworks-sp
+ExecStart=/home/zor/fireworks-sp/.venv/bin/streamlit run scripts/dashboard.py --server.port 8501 --server.headless true
+Restart=on-failure
+RestartSec=10s
+StandardOutput=append:/home/zor/fireworks-sp/logs/dashboard.log
+StandardError=append:/home/zor/fireworks-sp/logs/dashboard.log
+
+[Install]
+WantedBy=default.target

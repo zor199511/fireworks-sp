@@ -348,24 +348,44 @@ def update_all_dailies_bootstrap(conn, codes: list[str], start: str,
         batch = []
 
     end = str(today_cn())
+    # 子代理 2 轮 R2-韧性1: EM 100% 失败无早停, 连续失败超阈值 abort
+    consecutive_em_fail = [0]
+    EM_CIRCUIT_BREAKER = 50
     with ThreadPoolExecutor(max_workers=workers) as ex:
         futs = {ex.submit(fetch_daily_hist_em, c, st, end): (c, st)
                 for c, st in todo}
-        for fut in as_completed(futs):
-            code, st = futs[fut]
-            try:
-                rows = fut.result()
-                batch.extend(rows)
-                done += 1
-            except Exception:  # noqa: BLE001
-                fail += 1
-                failed_codes.append(code)
-            if len(batch) >= 3000:
-                flush()
-            if done % 500 == 0:
-                flush()
-                log.info("bootstrap progress: %d/%d fail=%d", done, len(todo), fail)
-    flush()
+        try:
+            for fut in as_completed(futs):
+                code, st = futs[fut]
+                try:
+                    rows = fut.result()
+                    if rows:
+                        consecutive_em_fail[0] = 0
+                        batch.extend(rows)
+                        done += 1
+                    else:
+                        consecutive_em_fail[0] += 1
+                        fail += 1
+                        failed_codes.append(code)
+                except Exception:  # noqa: BLE001
+                    consecutive_em_fail[0] += 1
+                    fail += 1
+                    failed_codes.append(code)
+                if consecutive_em_fail[0] >= EM_CIRCUIT_BREAKER:
+                    remaining = sum(1 for f in futs if not f.done())
+                    log.error(
+                        "EM 端连续 %d 失败, 触发 circuit breaker, "
+                        "跳过剩余 %d 只(可能 EM 端整体不可用)",
+                        consecutive_em_fail[0], remaining)
+                    break
+                if len(batch) >= 3000:
+                    flush()
+                if done % 500 == 0:
+                    flush()
+                    log.info("bootstrap progress: %d/%d fail=%d",
+                             done, len(todo), fail)
+        finally:
+            flush()
 
     if failed_codes:
         log.info("baostock fallback for %d failed codes", len(failed_codes))

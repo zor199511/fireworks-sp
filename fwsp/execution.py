@@ -71,10 +71,16 @@ def decide_exit(pos: dict, px_open, lo, hi, stop_pct: float,
         if trail and trail > 0 and pd.notna(lo) \
                 and lo <= peak * (1 - trail / 100):
             return min(px_open, peak * (1 - trail / 100)), "trail"
-        if profit_pct and profit_pct > 0 and pd.notna(hi):
-            tp = pos["buy_px"] * (1 + profit_pct / 100)
-            if hi >= tp:
-                return tp, "tp"
+        if profit_pct is not None:
+            # 子代理 2 轮 R2-数学3: 原版 `if profit_pct and profit_pct > 0`
+            # 静默忽略 0 / 负值, 用户误以为已设 TP. 显式分支: 必须是正数才生效.
+            if profit_pct <= 0:
+                raise ValueError(
+                    f"profit_pct must be > 0 or None, got {profit_pct}")
+            if pd.notna(hi):
+                tp = pos["buy_px"] * (1 + profit_pct / 100)
+                if hi >= tp:
+                    return tp, "tp"
         if held >= expire_h:
             return px_open, "expire"
     elif stuck_after and held >= stuck_after:

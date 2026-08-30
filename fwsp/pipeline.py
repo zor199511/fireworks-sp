@@ -100,24 +100,88 @@ def build_push_message(recos, stats) -> tuple[str, str]:
 
 def daily_run(push=True):
     """Full daily pipeline: update -> screen -> track -> push."""
+    from .lock import file_lock, LOCK_RECOMMEND
+    with file_lock(LOCK_RECOMMEND, op="daily_run") as got:
+        if not got:
+            log.warning("daily_run 锁被其他进程持有, 本次跳过(可能 dashboard "
+                        "在跑)")
+            return [], {}, False
+        # 子代理 2 轮 R2-运维4: 顶层 try/except + meta 错误记录 + 告警
+        try:
+            return _daily_run_inner(push)
+        except Exception as e:
+            import datetime
+            import traceback
+            err = traceback.format_exc()[:500]
+            try:
+                with db.get_conn() as _c:
+                    _c.execute(
+                        "INSERT OR REPLACE INTO meta (key,value) VALUES (?,?)",
+                        ("last_run_status", f"FAIL {datetime.datetime.now().isoformat()}"))
+                    _c.execute(
+                        "INSERT OR REPLACE INTO meta (key,value) VALUES (?,?)",
+                        ("last_run_error", err))
+                    _c.commit()
+            except Exception:
+                pass
+            # 推送告警(不与同日 daily_run 推送去重冲突: 用独立 task)
+            try:
+                sys_path = "/home/zor/.config/opencode/scripts/lib"
+                if sys_path not in __import__("sys").path:
+                    __import__("sys").path.insert(0, sys_path)
+                from notify import send_wechat_daily
+                send_wechat_daily("fireworks_cron_fail",
+                                  "⚠️fireworks_sp daily_run 失败",
+                                  f"```\n{err}\n```")
+            except Exception:
+                pass
+            raise
+
+
+def _daily_run_inner(push):
+    """daily_run 的实际实现, 外面套 file_lock + try/except."""
     with db.get_conn() as conn:
         db.init_schema(conn)
         update_all(conn, full=False)
 
+    # 子代理 2 轮 R2-韧性2: 原版在 run_screen 之后读 degraded, 但
+    # screener 内部 set_meta 写入可能因 apply_industry_cap 异常未触发.
+    # 改: run_screen 后重新从 active_factors 派生 degraded(单一真相源),
+    # 再读 meta 兜底; 任何异常下 try/finally 刷新 meta.
     recos = screener.run_screen(top_n=FILTERS["top_n"])
     tracker.update_tracking()
     stats = tracker.summary_stats()
 
-    # 因子系统降级标记：活跃因子集为空/失效时，推荐为技术兜底打分
     degraded = False
     try:
         with db.get_conn() as _c:
-            degraded = db.get_meta(_c, "factor_system_degraded") == "1"
-    except Exception:
-        degraded = False
+            # 派生(单一真相): 活跃因子集空 / 全 net_ir<=0 视为降级
+            aset = db.get_active_set(_c, "auto_evolve")
+            if not aset or not aset.get("factors"):
+                degraded = True
+            else:
+                ids = aset["factors"]
+                from .db import validate_table_name
+                ph = ",".join("?" * len(ids))
+                rows = _c.execute(
+                    f"SELECT code, net_ir FROM {validate_table_name('factor_eval')} "
+                    f"WHERE (code, run_at) IN ("
+                    f"  SELECT code, MAX(run_at) FROM {validate_table_name('factor_eval')} "
+                    f"  WHERE code IN ({ph}) GROUP BY code)", ids).fetchall()
+                if not rows or all((r[1] is None) for r in rows):
+                    degraded = True
+            # 同步 meta 兜底
+            _c.execute(
+                "INSERT OR REPLACE INTO meta (key,value) VALUES (?,?)",
+                ("factor_system_degraded", "1" if degraded else "0"))
+            _c.commit()
+    except Exception as e:  # noqa: BLE001
+        log.warning("factor_system_degraded derive failed: %s", e)
+        degraded = True
 
     sent = False
     if push and recos:
+        push_task = "fireworks_sp"  # 避免 except 分支下未绑定
         try:
             sys_path = "/home/zor/.config/opencode/scripts/lib"
             if sys_path not in __import__("sys").path:
@@ -128,9 +192,28 @@ def daily_run(push=True):
                 title = "⚠️[因子降级] " + title
                 desp = ("> ⚠️ **活跃因子集为空/失效，本轮推荐为技术兜底打分，"
                         "仅供参考，非因子系统产出。**\n\n" + desp)
-            sent = send_wechat_daily("fireworks_sp", title, desp)
+            # 子代理 2 轮 R2-运维5: 因子降级用独立 task 名, 避免同日被
+            # send_wechat_daily 同 task 去重吞掉
+            push_task = "fireworks_degraded" if degraded else "fireworks_sp"
+            sent = send_wechat_daily(push_task, title, desp)
         except Exception as e:  # noqa: BLE001
             log.warning("push failed (ignored): %s", e)
+        # 子代理 2 轮 R2-运维5: 记录推送结果到 meta, dashboard 可看
+        import datetime as _dt
+        try:
+            with db.get_conn() as _c:
+                _c.execute(
+                    "INSERT OR REPLACE INTO meta (key,value) VALUES (?,?)",
+                    ("last_push_ok", "1" if sent else "0"))
+                _c.execute(
+                    "INSERT OR REPLACE INTO meta (key,value) VALUES (?,?)",
+                    ("last_push_at", _dt.datetime.now().isoformat(timespec="seconds")))
+                _c.execute(
+                    "INSERT OR REPLACE INTO meta (key,value) VALUES (?,?)",
+                    ("last_push_task", push_task))
+                _c.commit()
+        except Exception:  # noqa: BLE001
+            pass
     if degraded:
         log.warning("因子系统降级：本轮推荐为技术兜底打分")
     return recos, stats, sent
