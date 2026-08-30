@@ -112,6 +112,12 @@ def _abs(x: pd.DataFrame) -> pd.DataFrame:
     return x.abs()
 
 
+def _log(x: pd.DataFrame) -> pd.DataFrame:
+    # 保护：<=0 的 amount 取 nan（与 build_factor_panel log(amt.clip(lower=1)) 一致）
+    clipped = x.clip(lower=1e-12)
+    return pd.DataFrame(np.log(clipped.values), index=clipped.index, columns=clipped.columns)
+
+
 def _returns(x: pd.DataFrame, n: float) -> pd.DataFrame:
     # 收益率：pct_change 内部用 shift，无前视
     return x.pct_change(int(n))
@@ -127,7 +133,8 @@ OPERATORS = {
     "ema": _ema, "std": _std, "zscore": _zscore,
     "ts_rank": _ts_rank, "cs_rank": _cs_rank, "cs_zscore": _cs_zscore,
     "ref": _ref, "sign": _sign, "corr": _corr, "min": _min, "max": _max,
-    "div": _div, "sub": _sub, "add": _add, "abs": _abs, "returns": _returns,
+    "div": _div, "sub": _sub, "add": _add, "abs": _abs, "log": _log,
+    "returns": _returns,
 }
 
 BASE_FIELDS = ("open", "high", "low", "close", "volume", "amount")

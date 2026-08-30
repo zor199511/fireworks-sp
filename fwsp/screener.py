@@ -14,6 +14,31 @@ RECO_COLS = ["run_date", "rank", "code", "name", "industry", "score",
               "price", "reasons", "metrics", "factor_set_id"]
 
 
+def _pit_universe_filter(conn, codes: list[str], lookback_days: int = 5) -> list[str]:
+    """从候选 codes 中剔除 daily 长期不更新的(已退市/已停牌)。
+
+    子代理 3 critical #5: 002155 last_daily=2026-08-19 但 spot 仍 8-26 更新，
+    不剔会被推荐。这里用 daily.last_date >= today - lookback_days 作为
+    "仍在交易" 的硬门 (停牌期间 daily.amount=0 但日期还在 → 仍可过)。
+    lookback=5 交易日容忍周末/节假日。
+    """
+    if not codes:
+        return []
+    from datetime import datetime, timedelta
+    today = datetime.now().date()
+    cutoff = (today - timedelta(days=lookback_days * 2)).isoformat()  # *2 跨周末
+    rows = conn.execute(
+        f"SELECT code, MAX(date) AS last FROM daily "
+        f"WHERE code IN ({','.join('?' * len(codes))}) "
+        f"GROUP BY code", codes).fetchall()
+    live = {c for c, last in rows if last and last >= cutoff}
+    dropped = set(codes) - live
+    if dropped:
+        log.info("PIT universe 过滤: 剔除 %d 只长期无 daily 数据的股票 (lookback=%dd)",
+                 len(dropped), lookback_days)
+    return [c for c in codes if c in live]
+
+
 def _in_index_tags(conn, code: str) -> str:
     """查询某 code 当前所在的宽基指数(取最近 snapshot_date)。
 
@@ -67,7 +92,11 @@ def passes_hard_filters(r: dict, cfg: dict) -> list[str]:
     elif roe < cfg["min_roe"]:
         fails.append(f"ROE{roe:.1f}<{cfg['min_roe']}%")
     debt = r.get("debt_ratio")
-    if debt is not None and debt > cfg["max_debt"]:
+    # 债务率缺失视为不合格：高负债银行/地产未披露意味着不可信，统一拒绝
+    # (子代理 4 critical #1/#2 指出 222 高负债股绕过质量门)
+    if debt is None:
+        fails.append("负债率缺失")
+    elif debt > cfg["max_debt"]:
         fails.append(f"负债率{debt:.1f}>{cfg['max_debt']}%")
     return fails
 
@@ -137,6 +166,13 @@ def run_screen(top_n=10, persist: bool = True) -> list[dict]:
                 continue
             survivors.append(r)
         log.info("after fundamental filters: %d", len(survivors))
+
+        # PIT universe 边界：剔除 daily 长期不更新的股票(已退市/已停牌)
+        # 子代理 3 critical #5: spot 比 daily 滞后,需要额外硬门
+        survivors_codes = _pit_universe_filter(
+            conn, [r["code"] for r in survivors])
+        survivors = [r for r in survivors if r["code"] in set(survivors_codes)]
+        log.info("after PIT universe filter: %d", len(survivors))
 
         # 流动性预筛（与进化口径一致）：需 ≥130 日线 + 近 20 日日均额达标
         liquid = []

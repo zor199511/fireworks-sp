@@ -82,9 +82,40 @@ def main():
 
     print(f"\n选中因子: {selected}")
 
-    # 固化到 meta，供 dashboard 实时推荐使用
+    # 同步到 factor_library：选中因子若不在库中则写入
+    # (build_factor_panel 内的 4 硬编码因子 amihud/hi60_dist/log_amt20/gap_up
+    # 无 yaml 表达式，需补全，否则 multifactor_scores 走不到 spec 跳过)
+    from datetime import datetime as _dt
+    BUILTIN = {
+        "amihud":   ("liquidity",      "div(abs(returns(close, 1)), amount)",
+                     "Amihud 非流动性: |ret|/amount"),
+        "hi60_dist": ("price_position", "sub(div(close, ts_max(high, 60)), 1)",
+                      "60日高点距离"),
+        "log_amt20": ("liquidity",      "log(ts_mean(amount, 20))",
+                      "20日均成交额对数"),
+        "gap_up":    ("price_pattern",  "sub(div(open, ref(close, 1)), 1)",
+                      "跳空高开"),
+    }
     from fwsp.db import get_conn as _gc
     with _gc() as conn:
+        existing = {r[0] for r in conn.execute(
+            "SELECT code FROM factor_library").fetchall()}
+        now = _dt.now().isoformat(timespec="seconds")
+        for fid in selected:
+            if fid in existing:
+                continue
+            if fid in BUILTIN:
+                cat, expr, desc = BUILTIN[fid]
+                conn.execute(
+                    "INSERT OR REPLACE INTO factor_library "
+                    "(code, category, expr, params_json, desc, source, created_at) "
+                    "VALUES (?,?,?,?,?,?,?)",
+                    (fid, cat, expr, "{}", desc, "research_mine", now))
+                log_msg = f"  [lib] {fid} <- {expr}"
+                print(log_msg)
+        conn.commit()
+        # 也写一份 OOS 评估到 factor_eval (selected 由 set_active_factors 处理)
+        # 重要：selected 走 active_sets/factor_eval.selected 派生，不要在这里写
         M.save_selected(conn, selected, summary={
             "selected": selected, "is_start": args.is_start,
             "holdout": args.holdout, "horizon": args.horizon,

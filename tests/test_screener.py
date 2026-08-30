@@ -98,9 +98,11 @@ class TestHardFilters:
     def test_missing_roe_fails(self):
         assert passes_hard_filters(_row(roe=None), CFG)
 
-    def test_high_debt_fails_but_null_debt_passes(self):
+    def test_high_debt_fails_and_null_debt_fails(self):
+        # 子代理 4 critical #2: 债务率 None 不应通过(避免 222 高负债股绕过)
         assert passes_hard_filters(_row(debt_ratio=70.0), CFG)
-        assert passes_hard_filters(_row(debt_ratio=None), CFG) == []
+        fails = passes_hard_filters(_row(debt_ratio=None), CFG)
+        assert any("负债率" in f for f in fails)
 
 
 @pytest.fixture

@@ -28,10 +28,10 @@ log = logging.getLogger("backfill_index")
 
 # 中证指数(code->akshare fn);symbol 字段;source 用于统一 snapshot_date
 SOURCES = [
-    ("000300", "csi", "ak.index_stock_cons_csindex"),
-    ("399905", "cni", "ak.index_detail_hist_cni"),
-    ("399006", "cni", "ak.index_detail_hist_cni"),
-    ("399001", "cni", "ak.index_detail_hist_cni"),  # 深证成指
+    ("000300", "csi", "ak.index_stock_cons_csindex"),   # 沪深 300 (中证)
+    ("000905", "csi", "ak.index_stock_cons_csindex"),   # 中证 500 (中证, 之前错用 399905 国证导致失败)
+    ("399006", "cni", "ak.index_detail_hist_cni"),      # 创业板指 (国证)
+    ("399001", "cni", "ak.index_detail_hist_cni"),      # 深证成指 (国证)
 ]
 
 COLS = ["index_code", "code", "name", "industry", "snapshot_date"]
@@ -69,6 +69,12 @@ def backfill(only: list[str] | None = None):
                 log.warning("拉取 %s 失败: %s", idx_code, e)
                 continue
             df["code"] = df["code"].astype(str).str.zfill(6)
+            # silent failure 防护：0 行结果不当作"成功"，显式 ERROR
+            if len(df) == 0:
+                log.error("指数 %s: 拉取结果为 0 行,跳过写入(避免覆盖旧数据)",
+                          idx_code)
+                fetched.append((idx_code, 0))
+                continue
             rows = [(idx_code, r["code"], r["name"], r.get("industry"), snap_date)
                     for _, r in df.iterrows()]
             # 删旧 snapshot

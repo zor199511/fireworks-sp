@@ -122,13 +122,16 @@ def multifactor_scores(conn, codes: list[str], as_of: str | None = None
         latest[s.id] = row
 
     mat = pd.DataFrame({s.id: latest[s.id] for s in specs})
-    # 截面 zscore（候选池内标准化）；但候选池截面只有 1 行(当日)或某因子
-    # 常值时，rowstd=0，除0 会把所有原始分值归零（回归 bug）。活跃因子本身
-    # 多以 zscore/标准化形式存（如 mr_zscore_rev__w120），因此在 1 行或 std=0
-    # 时直接沿用原始值×权重，不重复标准化；多行且有波动时才截面 zscore。
-    row_std = mat.std(axis=1).replace(0, np.nan)
-    if row_std.notna().all() and len(mat) > 1:
-        z = mat.sub(mat.mean(axis=1), axis=0).div(row_std, axis=0).fillna(0.0)
+    # 截面 zscore：每因子在候选池(code)间标准化（跨列 axis=0），再按
+    # 权重合成。这样多因子比较的不是 raw 量级而是相对排名。
+    # mat 形状 (n_codes, n_factors): axis=0 → 跨 code std(per-factor)。
+    # 单行 / std=0 时直接用原始值（不做 zscore），避免除 0 归零。
+    col_std = mat.std(axis=0).replace(0, np.nan)
+    if col_std.notna().all() and mat.shape[0] > 1:
+        # axis=1 表示按行(per-code)减均值 + 除以该列 std(per-factor)
+        z = (mat.sub(mat.mean(axis=0), axis=1)
+               .div(col_std, axis=1)
+               .fillna(0.0))
     else:
         z = mat.fillna(0.0)
 
