@@ -508,12 +508,42 @@ def backfill_gaps(conn, codes: list[str], lookback_days=10):
     return healed
 
 
-def refetch_qfq_all(conn, codes: list[str], start: str, workers=6):
+def fetch_daily_hist_baostock_qfq(code: str, start: str, end: str) -> list[tuple]:
+    """前复权日线（baostock adjustflag='1'，写 daily_qfq）。
+
+    baostock 前复权价连续、除权日不跳变，且与 akshare EM 不通的环境（如受限
+    服务器）仍可工作。返回 (code,date,open,high,low,close,volume,amount)。
+    """
+    import baostock as bs
+    bs_code = ("sh." if code[0] == "6" else "sz.") + str(code).zfill(6)
+    lg = bs.login()
+    try:
+        rs = bs.query_history_k_data_plus(
+            bs_code, "date,open,high,low,close,volume,amount,tradestatus",
+            start_date=start, end_date=end, frequency="d", adjustflag="1")
+        data = rs.get_data()
+    finally:
+        bs.logout()
+    out = []
+    for _, r in (data.iterrows() if data is not None else []):
+        if r.get("tradestatus") not in ("1", ""):
+            continue
+        out.append((code, r["date"], _f(r["open"]), _f(r["high"]),
+                    _f(r["low"]), _f(r["close"]), _f(r["volume"]),
+                    _f(r["amount"])))
+    return out
+
+
+def refetch_qfq_all(conn, codes: list[str], start: str, workers=6,
+                    source: str = "akshare"):
     """一次性全量重抓前复权日线写 daily_qfq（修复已知限制用）。
 
-    不复权 daily 表保持不变；本函数仅在需要补全 qfq 历史时手动/定时触发
-    （akshare 限流，约 15-20 分钟）。失败静默跳过，不影响主流程。
+    不复权 daily 表保持不变。source='akshare' 用东方财富(并发,本机网络通);
+    source='baostock' 用 baostock 前复权(adjustflag='1',单会话串行+自动重登,
+    适配 akshare EM 不通的受限服务器)。失败静默跳过，不影响主流程。
     """
+    if source == "baostock":
+        return _refetch_qfq_baostock(conn, codes, start)
     done = fail = 0
     batch: list[tuple] = []
     from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -544,6 +574,74 @@ def refetch_qfq_all(conn, codes: list[str], start: str, workers=6):
                 log.info("qfq refetch progress: %d/%d fail=%d",
                          done, len(codes), fail)
     flush()
+    return done, fail
+
+
+def _refetch_qfq_baostock(conn, codes: list[str], start: str):
+    """baostock 前复权全量重抓（单会话串行，断线自动重登）。"""
+    import socket
+
+    import baostock as bs
+    old_timeout = socket.getdefaulttimeout()
+    if old_timeout is None or old_timeout > 20:
+        socket.setdefaulttimeout(20)
+    end = str(today_cn())
+    done = fail = 0
+    batch: list[tuple] = []
+
+    def flush():
+        nonlocal batch
+        if batch:
+            upsert_rows(conn, "daily_qfq", _DAILY_QFQ_COLS, batch)
+            conn.commit()
+            batch = []
+
+    lg = bs.login()
+    for i, code in enumerate(codes):
+        bs_code = ("sh." if code[0] == "6" else "sz.") + code
+        data = None
+        try:
+            rs = bs.query_history_k_data_plus(
+                bs_code, "date,open,high,low,close,volume,amount,tradestatus",
+                start_date=start, end_date=end, frequency="d", adjustflag="1")
+            data = rs.get_data()
+        except Exception:  # noqa: BLE001
+            try:
+                bs.logout()
+            except Exception:  # noqa: BLE001
+                pass
+            time.sleep(random.uniform(2.0, 4.0))
+            try:
+                lg = bs.login()
+                rs = bs.query_history_k_data_plus(
+                    bs_code, "date,open,high,low,close,volume,amount,tradestatus",
+                    start_date=start, end_date=end, frequency="d", adjustflag="1")
+                data = rs.get_data()
+            except Exception:  # noqa: BLE001
+                fail += 1
+                log.debug("baostock qfq %s failed after relogin", code)
+                continue
+        for _, r in (data.iterrows() if data is not None else []):
+            if r.get("tradestatus") not in ("1", ""):
+                continue
+            batch.append((code, r["date"], _f(r["open"]), _f(r["high"]),
+                          _f(r["low"]), _f(r["close"]), _f(r["volume"]),
+                          _f(r["amount"])))
+        done += 1
+        if len(batch) >= 3000:
+            flush()
+        if (i + 1) % 200 == 0:
+            if batch:
+                flush()
+            log.info("baostock qfq refetch: %d/%d (fail=%d)",
+                     i + 1, len(codes), fail)
+    if batch:
+        flush()
+    try:
+        bs.logout()
+    except Exception:  # noqa: BLE001
+        pass
+    socket.setdefaulttimeout(old_timeout)
     return done, fail
 
 
