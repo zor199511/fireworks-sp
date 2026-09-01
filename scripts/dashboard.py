@@ -153,7 +153,8 @@ with st.sidebar:
     st.caption(f"股票池 {meta['stocks']} | K线覆盖 {meta['codes']} | "
                f"最新交易日 {meta['last_bar'] or '—'}")
     page = sidebar_nav(["今日推荐", "个股查询", "策略回测", "多因子策略",
-                        "推荐追踪", "因子进化", "因子库", "进化历史"])
+                        "推荐追踪", "因子进化", "因子库", "进化历史",
+                        "回测记录"])
     st.divider()
     st.caption("候选池生成器，非投资建议。\n买入需独立判断并严格止损。")
 
@@ -682,3 +683,107 @@ elif page == "进化历史":
             st.write("入选因子:", ", ".join(json.loads(r["selected_json"] or "[]")))
             if r["notes"]:
                 st.caption(r["notes"])
+
+elif page == "回测记录":
+    st.header("回测历史记录")
+    st.caption("查看所有已保存的回测结果，支持参数筛选和结果对比。")
+
+    with get_conn() as conn:
+        init_schema(conn)
+        # 检查表是否存在
+        tables = [r[0] for r in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'").fetchall()]
+        if "backtest_results" not in tables:
+            st.info("backtest_results 表不存在，请先运行一次回测。")
+            st.stop()
+
+        rows = conn.execute(
+            "SELECT run_id, started_at, params_json, total_return, cagr, "
+            "max_drawdown, sharpe, n_trades, win_rate "
+            "FROM backtest_results ORDER BY started_at DESC LIMIT 50"
+        ).fetchall()
+
+    if not rows:
+        st.info("还没有回测记录。去「策略回测」或「多因子策略」页面运行一次回测。")
+        st.stop()
+
+    # 解析参数并构建 DataFrame
+    records = []
+    for r in rows:
+        params = json.loads(r[2]) if r[2] else {}
+        records.append({
+            "run_id": r[0],
+            "时间": r[1][:16] if r[1] else "—",
+            "策略": params.get("strategy", "—"),
+            "开始": params.get("start", "—"),
+            "结束": params.get("end", "—"),
+            "TopN": params.get("top_n", "—"),
+            "持有天数": params.get("hold_days", "—"),
+            "止损%": params.get("stop_pct", "—"),
+            "止盈%": params.get("profit_pct", "—"),
+            "总收益": f"{r[3]*100:+.1f}%" if r[3] is not None else "—",
+            "年化": f"{r[4]*100:+.1f}%" if r[4] is not None else "—",
+            "最大回撤": f"{r[5]*100:.1f}%" if r[5] is not None else "—",
+            "夏普": f"{r[6]:.2f}" if r[6] is not None else "—",
+            "交易笔数": r[7] or 0,
+            "胜率": f"{r[8]*100:.0f}%" if r[8] is not None else "—",
+        })
+
+    df = pd.DataFrame(records)
+
+    # 筛选器
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        strategy_filter = st.selectbox("策略筛选", ["全部", "reversal", "momentum", "multifactor"])
+    with col2:
+        min_sharpe = st.number_input("最低夏普", -5.0, 10.0, -5.0, step=0.1)
+    with col3:
+        min_return = st.number_input("最低总收益%", -100.0, 1000.0, -100.0, step=10.0)
+
+    # 应用筛选
+    filtered = df.copy()
+    if strategy_filter != "全部":
+        filtered = filtered[filtered["策略"] == strategy_filter]
+    filtered = filtered[filtered["夏普"].apply(lambda x: float(x) >= min_sharpe if x != "—" else False)]
+    filtered = filtered[filtered["总收益"].apply(
+        lambda x: float(x.replace("%", "").replace("+", "")) >= min_return if x != "—" else False)]
+
+    st.metric("筛选结果", f"{len(filtered)} / {len(df)} 条")
+
+    if not filtered.empty:
+        export_button(filtered, "backtest_history", "回测历史")
+
+        # 显示详情
+        for _, row in filtered.iterrows():
+            with card_container(f"{row['时间']} | {row['策略']} | 夏普 {row['夏普']}"):
+                c1, c2, c3, c4 = st.columns(4)
+                c1.metric("总收益", row["总收益"])
+                c2.metric("年化", row["年化"])
+                c3.metric("最大回撤", row["最大回撤"])
+                c4.metric("胜率", row["胜率"])
+
+                st.caption(f"参数: Top{row['TopN']} | 持有{row['持有天数']}天 | "
+                           f"止损{row['止损%']}% | 止盈{row['止盈%']}% | {row['交易笔数']}笔交易")
+
+                # 加载并显示净值曲线
+                with get_conn() as conn:
+                    detail = conn.execute(
+                        "SELECT equity_json FROM backtest_results WHERE run_id=?",
+                        (row["run_id"],)
+                    ).fetchone()
+                if detail and detail[0]:
+                    equity = json.loads(detail[0])
+                    eq_s = pd.Series({pd.Timestamp(k): v for k, v in equity.items()}).sort_index()
+                    eq_n = eq_s / eq_s.iloc[0]
+                    with get_conn() as conn:
+                        b = conn.execute(
+                            "SELECT date,close FROM index_daily WHERE code='sh.000300' "
+                            "AND date BETWEEN ? AND ? ORDER BY date",
+                            (str(eq_s.index[0].date()), str(eq_s.index[-1].date()))
+                        ).fetchall()
+                    bench_s = None
+                    if b:
+                        bdf = pd.DataFrame(b, columns=["date", "close"])
+                        bench_s = bdf.set_index(pd.to_datetime(bdf["date"]))["close"]
+                        bench_s = bench_s / bench_s.iloc[0]
+                    _echarts(equity_curve(eq_n, bench_s), height=300)
