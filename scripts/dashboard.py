@@ -1,3 +1,4 @@
+import io
 import json
 import sys
 from datetime import date, datetime
@@ -18,6 +19,31 @@ from ui import (inject_css, sidebar_nav, section_title, metric_row,  # noqa: E40
                 candle_chart, ratio_bar, pareto_scatter, timeline,
                 equity_curve, factor_bar, freq_bar, _echarts)  # noqa: E402
 inject_css()
+
+
+def export_button(df: pd.DataFrame, key: str, label: str = "导出"):
+    """通用导出按钮：支持 CSV 和 Excel"""
+    col1, col2 = st.columns(2)
+    with col1:
+        csv = df.to_csv(index=False, encoding="utf-8-sig")
+        st.download_button(
+            label=f"📥 {label} CSV",
+            data=csv,
+            file_name=f"{key}_{date.today()}.csv",
+            mime="text/csv",
+            key=f"csv_{key}",
+        )
+    with col2:
+        buf = io.BytesIO()
+        with pd.ExcelWriter(buf, engine="openpyxl") as writer:
+            df.to_excel(writer, index=False, sheet_name="Sheet1")
+        st.download_button(
+            label=f"📥 {label} Excel",
+            data=buf.getvalue(),
+            file_name=f"{key}_{date.today()}.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            key=f"xlsx_{key}",
+        )
 
 from fwsp.backtest import run_backtest  # noqa: E402
 from fwsp.config import FILTERS  # noqa: E402
@@ -172,6 +198,17 @@ if page == "今日推荐":
         {"label": "信号日期", "value": run_date},
     ])
 
+    # 导出按钮
+    export_df = pd.DataFrame([
+        {"排名": r["rank"], "代码": r["code"], "名称": r["name"],
+         "行业": r["industry"], "评分": r["score"],
+         "理由": " | ".join(r["reasons"]),
+         "PE": r["metrics"].get("pe_dyn"), "PB": r["metrics"].get("pb"),
+         "总市值(亿)": (r["metrics"].get("total_mv") or 0) / 1e8}
+        for r in recos
+    ])
+    export_button(export_df, "recommendations", "今日推荐")
+
     for r in recos:
         mv_yi = (r["metrics"].get("total_mv") or 0) / 1e8
         head = (f"#{r['rank']} {r['name']} ({r['code']})  ·  "
@@ -243,6 +280,13 @@ elif page == "策略回测":
              "delta": f"{res['n_trades']}笔"},
             {"label": "夏普", "value": f"{res['sharpe']:.2f}"},
         ])
+
+        # 导出回测交易记录
+        if res["trades"]:
+            trades_df = pd.DataFrame(res["trades"])
+            trades_df["ret_pct"] = trades_df["ret"] * 100
+            export_button(trades_df[["code", "entry_date", "exit_date", "ret_pct", "reason"]],
+                          "backtest_trades", "交易记录")
 
         eq = pd.Series(res["equity"])
         eq.index = pd.to_datetime(eq.index)
@@ -419,6 +463,10 @@ elif page == "多因子策略":
                      "delta": f"{int(res['n_trades'])}笔"},
                     {"label": "夏普",   "value": f"{res['sharpe']:.2f}"},
                 ])
+                # 导出多因子回测结果
+                if res.get("trades"):
+                    mf_trades_df = pd.DataFrame(res["trades"])
+                    export_button(mf_trades_df, "multifactor_trades", "多因子交易记录")
                 eq = res["equity"]
                 eq_n = eq / eq.iloc[0]
                 with get_conn() as conn:
@@ -465,6 +513,8 @@ elif page == "推荐追踪":
             "FROM recommendations GROUP BY run_date ORDER BY run_date DESC",
             conn)
     st.dataframe(hist, use_container_width=True, hide_index=True)
+    if not hist.empty:
+        export_button(hist, "tracking_history", "追踪历史")
 
 elif page == "因子进化":
     st.header("因子进化 · 过拟合防护看板")
@@ -586,6 +636,10 @@ elif page == "因子库":
     with card_container("因子明细"):
         st.dataframe(lib_display[show_cols].round(3), use_container_width=True,
                      hide_index=True)
+    if not lib.empty:
+        export_button(lib[["code", "category", "source", "desc", "is_icir",
+                           "oos_icir", "net_ir", "stability", "selected"]],
+                      "factor_library", "因子库")
 
 elif page == "进化历史":
     st.header("进化历史 · 自动进化时间线")

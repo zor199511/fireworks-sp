@@ -112,6 +112,65 @@ CREATE TABLE IF NOT EXISTS evolution_log (
     promoted INTEGER,
     notes TEXT
 );
+CREATE TABLE IF NOT EXISTS evidence_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id TEXT NOT NULL,
+    stage TEXT NOT NULL,
+    claim TEXT NOT NULL,
+    source TEXT,
+    as_of TEXT,
+    quote TEXT,
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_evidence_run ON evidence_log(run_id);
+CREATE INDEX IF NOT EXISTS idx_evidence_stage ON evidence_log(stage);
+CREATE TABLE IF NOT EXISTS calc_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id TEXT NOT NULL,
+    output_name TEXT NOT NULL,
+    output_value TEXT,
+    func_name TEXT NOT NULL,
+    inputs_json TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_calc_run ON calc_log(run_id);
+CREATE TABLE IF NOT EXISTS data_conflicts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    field TEXT NOT NULL,
+    source_a TEXT,
+    value_a TEXT,
+    source_b TEXT,
+    value_b TEXT,
+    resolution TEXT,
+    resolved_at TEXT
+);
+CREATE TABLE IF NOT EXISTS run_manifest (
+    run_id TEXT PRIMARY KEY,
+    run_type TEXT NOT NULL,
+    started_at TEXT NOT NULL,
+    finished_at TEXT,
+    status TEXT NOT NULL,
+    params_json TEXT,
+    summary_json TEXT,
+    error TEXT
+);
+CREATE TABLE IF NOT EXISTS backtest_results (
+    run_id TEXT PRIMARY KEY,
+    run_type TEXT NOT NULL,
+    started_at TEXT NOT NULL,
+    params_json TEXT,
+    total_return REAL,
+    cagr REAL,
+    max_drawdown REAL,
+    sharpe REAL,
+    n_trades INTEGER,
+    win_rate REAL,
+    avg_trade_ret REAL,
+    bench_return REAL,
+    equity_json TEXT,
+    trades_json TEXT,
+    summary_json TEXT
+);
 """
 
 

@@ -1,6 +1,6 @@
 import json
 import logging
-from datetime import date
+from datetime import date, datetime
 
 import pandas as pd
 
@@ -162,8 +162,13 @@ def apply_industry_cap(scored: list[dict], top_n: int, cap: int) -> list[dict]:
 
 def run_screen(top_n=10, persist: bool = True) -> list[dict]:
     from .config import FILTERS
+    from .evidence import EvidenceLogger
+    import uuid
+    run_id = f"screen_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:8]}"
     with get_conn() as conn:
         init_schema(conn)
+        ev = EvidenceLogger(conn, run_id, "screening")
+        ev.log("init", f"开始选股 top_n={top_n}", source="screener.run_screen")
         base = hard_filter_rows(conn)
         # 统计 debt_ratio 缺失数, 写 meta 让 dashboard 感知
         null_debt = int(base["debt_ratio"].isna().sum()) if hasattr(base["debt_ratio"], "sum") else 0
@@ -176,6 +181,7 @@ def run_screen(top_n=10, persist: bool = True) -> list[dict]:
             set_meta(conn, "universe_null_debt_count", str(null_debt))
         log.info("candidates after universe SQL: %d (debt_ratio 缺失 %d 只)",
                  len(base), null_debt)
+        ev.log("universe", f"SQL 筛选后候选 {len(base)} 只", source="hard_filter_rows")
 
         survivors = []
         missing_fund_count = 0
@@ -188,6 +194,8 @@ def run_screen(top_n=10, persist: bool = True) -> list[dict]:
             survivors.append(r)
         log.info("after fundamental filters: %d (基本面缺失 %d 只, 待推 %d)",
                  len(survivors), missing_fund_count, missing_fund_count)
+        ev.log("filter", f"基本面筛选后 {len(survivors)} 只, 缺失 {missing_fund_count}",
+               source="passes_hard_filters")
         # 子代理 2 轮 R2-韧性3: 缺失 >30% universe 触发告警 meta
         if len(base) > 0 and missing_fund_count / len(base) > 0.30:
             set_meta(conn, "universe_fund_missing_alert",
@@ -202,6 +210,7 @@ def run_screen(top_n=10, persist: bool = True) -> list[dict]:
             conn, [r["code"] for r in survivors])
         survivors = [r for r in survivors if r["code"] in set(survivors_codes)]
         log.info("after PIT universe filter: %d", len(survivors))
+        ev.log("filter", f"PIT universe 筛选后 {len(survivors)} 只", source="_pit_universe_filter")
 
         # 流动性预筛（与进化口径一致）：需 ≥130 日线 + 近 20 日日均额达标
         # 子代理 2 轮 R2-性能1: N+1 SELECT 改为 batched IN 一次查.
@@ -296,6 +305,14 @@ def run_screen(top_n=10, persist: bool = True) -> list[dict]:
             r["rank"] = i
         log.info("final scored pool: %d; top %d selected",
                  len(scored), len(top))
+        ev.log("result", f"最终评分池 {len(scored)} 只, 选出 Top {len(top)}",
+               source="apply_industry_cap")
+        for r in top:
+            ev.log("pick", f"#{r['rank']} {r['code']} {r.get('name','')} score={r['score']:.4f}",
+                   source="multifactor_score")
+        ev.finish(status="complete", summary={"pool_size": len(scored),
+                                               "top_n": len(top),
+                                               "codes": [r["code"] for r in top]})
         if persist:
             _persist(conn, top)
         return top

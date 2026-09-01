@@ -8,6 +8,7 @@ import numpy as np
 import pandas as pd
 
 from .costs import COST_BUY, COST_SELL
+from .evidence import trace_calc, CalcTracer
 
 __all__ = [
     "compute_shares", "position_return", "sell_value",
@@ -15,6 +16,7 @@ __all__ = [
 ]
 
 
+@trace_calc("compute_shares")
 def compute_shares(budget: float, px: float, cash: float) -> int:
     """按预算与可用现金计算可买手数（100 股/手，含买入成本）。"""
     if budget <= 0 or pd.isna(px) or px <= 0:
@@ -27,11 +29,13 @@ def compute_shares(budget: float, px: float, cash: float) -> int:
     return shares
 
 
+@trace_calc("sell_value")
 def sell_value(shares: int, px: float) -> float:
     """卖出到账金额（扣卖出成本）。"""
     return shares * px * (1 - COST_SELL)
 
 
+@trace_calc("position_return")
 def position_return(sell_px: float, buy_px: float) -> float:
     """单笔持仓收益率（含买卖成本）。"""
     return (sell_px * (1 - COST_SELL)) / (buy_px * (1 + COST_BUY)) - 1
@@ -46,6 +50,7 @@ def mark_equity(positions: dict, closes: pd.DataFrame, d, cash: float) -> float:
     return eq
 
 
+@trace_calc("decide_exit")
 def decide_exit(pos: dict, px_open, lo, hi, stop_pct: float,
                 profit_pct, trail, held: int, horizon: int,
                 stuck_after: int | None = None):

@@ -1,6 +1,6 @@
 import json
 import logging
-from datetime import date
+from datetime import date, datetime
 
 import numpy as np
 import pandas as pd
@@ -133,8 +133,16 @@ def _scores_asof(ind, d, strategy="momentum") -> pd.Series:
 def run_backtest(start="2024-01-01", end=None, top_n=10, hold_days=5,
                  stop_pct=-8.0, profit_pct=8.0, capital=1_000_000.0,
                  strategy="reversal") -> dict:
+    from .evidence import EvidenceLogger
+    import uuid
+    run_id = f"bt_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:8]}"
     today = str(date.today())
     end = end or today
+    ev = EvidenceLogger(run_id=run_id, run_type="backtest")
+    ev.log("init", f"回测参数: start={start} end={end} top_n={top_n} "
+           f"hold_days={hold_days} stop={stop_pct}% profit={profit_pct}% "
+           f"strategy={strategy} capital={capital}",
+           source="backtest.run_backtest")
     with get_conn() as conn:
         panels = load_panels(conn)
         bench = conn.execute(
@@ -251,7 +259,53 @@ def run_backtest(start="2024-01-01", end=None, top_n=10, hold_days=5,
         "equity": {str(d.date()): e for d, e in equity_curve},
         "trades": trades,
     }
+    ev.log("result", f"回测完成: 总收益={ret_total:.2%} 年化={cagr:.2%} "
+           f"最大回撤={dd:.2%} 夏普={sharpe:.2f} 交易={len(trades)}笔 "
+           f"胜率={result['win_rate']:.1%}",
+           source="backtest.run_backtest")
+    ev.finish(status="complete", summary={"total_return": ret_total,
+                                           "cagr": cagr,
+                                           "max_drawdown": dd,
+                                           "sharpe": sharpe,
+                                           "n_trades": len(trades)})
+    # 持久化回测结果到数据库
+    _save_backtest_result(run_id, result, params={
+        "start": start, "end": end, "top_n": top_n,
+        "hold_days": hold_days, "stop_pct": stop_pct,
+        "profit_pct": profit_pct, "capital": capital,
+        "strategy": strategy
+    })
     return result
+
+
+def _save_backtest_result(run_id: str, result: dict, params: dict):
+    """保存回测结果到数据库"""
+    from .db import get_conn
+    from .evidence import ensure_evidence_schema
+    with get_conn() as conn:
+        ensure_evidence_schema(conn)
+        conn.execute(
+            "INSERT OR REPLACE INTO backtest_results "
+            "(run_id, run_type, started_at, params_json, total_return, cagr, "
+            "max_drawdown, sharpe, n_trades, win_rate, avg_trade_ret, bench_return, "
+            "equity_json, trades_json, summary_json) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (run_id, "backtest", datetime.now().isoformat(),
+             json.dumps(params, ensure_ascii=False),
+             result["total_return"], result["cagr"], result["max_drawdown"],
+             result["sharpe"], result["n_trades"], result["win_rate"],
+             result["avg_trade_ret"], result["bench_return"],
+             json.dumps(result["equity"], default=str),
+             json.dumps(result["trades"], ensure_ascii=False),
+             json.dumps({
+                 "total_return": result["total_return"],
+                 "cagr": result["cagr"],
+                 "max_drawdown": result["max_drawdown"],
+                 "sharpe": result["sharpe"],
+                 "n_trades": result["n_trades"]
+             }, ensure_ascii=False))
+        )
+        conn.commit()
 
 
 if __name__ == "__main__":
